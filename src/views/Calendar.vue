@@ -13,9 +13,20 @@ const isDragging = ref(false)
 const dragStartTime = ref(null)
 const dragDay = ref(null)
 
+// 引用
+const weekHeaderRef = ref(null)
+const calendarBodyRef = ref(null)
+
+// 同步滚动
+const onCalendarScroll = () => {
+  if (weekHeaderRef.value && calendarBodyRef.value) {
+    weekHeaderRef.value.style.transform = `translateX(-${calendarBodyRef.value.scrollLeft}px)`
+  }
+}
+
 // 每小时半小时时间片数
 const HALF_HOUR_SLOTS = 2
-const START_HOUR = 8
+const START_HOUR = 6
 const END_HOUR = 22
 
 // 计算当前周的日期（周一到周日）
@@ -55,6 +66,15 @@ const timeSlots = computed(() => {
   return slots
 })
 
+// 生成时间轴标签（只显示整点）
+const timeLabels = computed(() => {
+  const labels = []
+  for (let hour = START_HOUR; hour <= END_HOUR; hour++) {
+    labels.push(hour)
+  }
+  return labels
+})
+
 // 格式化日期
 const formatDate = (date) => {
   return `${date.getMonth() + 1}/${date.getDate()}`
@@ -71,6 +91,35 @@ const formatTime = (hour) => {
 const getEventsByDay = (day) => {
   const dayStr = day.toISOString().split('T')[0]
   return events.value.filter(event => event.date === dayStr)
+}
+
+// 计算事件的位置和高度
+const getEventStyle = (event) => {
+  const startSlotIndex = timeSlots.value.findIndex(slot => Math.abs(slot.value - event.startTime) < 0.001)
+  const endSlotIndex = timeSlots.value.findIndex(slot => Math.abs(slot.value - event.endTime) < 0.001)
+
+  if (startSlotIndex === -1 || endSlotIndex === -1) {
+    return {}
+  }
+
+  const top = startSlotIndex * 30
+  const height = (endSlotIndex - startSlotIndex) * 30
+
+  return {
+    position: 'absolute',
+    top: `${top}px`,
+    height: `${height}px`,
+    left: '4px',
+    right: '4px'
+  }
+}
+
+// 每天的事件列表（用于绝对定位渲染）
+const getDayEventsForRender = (day) => {
+  return getEventsByDay(day).map(event => ({
+    ...event,
+    style: getEventStyle(event)
+  }))
 }
 
 // 开始拖拽
@@ -156,6 +205,11 @@ const deleteEvent = () => {
   showDialog.value = false
 }
 
+// 列表中直接删除事件
+const deleteEventItem = (event) => {
+  events.value = events.value.filter(e => e.id !== event.id)
+}
+
 // 切换到上一周
 const prevWeek = () => {
   const newDate = new Date(currentWeekStart.value)
@@ -182,6 +236,32 @@ const isToday = (day) => {
          day.getMonth() === today.getMonth() &&
          day.getFullYear() === today.getFullYear()
 }
+
+// 获取周数（ISO周数）
+const getWeekNumber = (date) => {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  d.setDate(d.getDate() + 4 - (d.getDay() || 7))
+  const yearStart = new Date(d.getFullYear(), 0, 1)
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7)
+  return weekNo
+}
+
+// 获取全年总周数
+const getTotalWeeksInYear = (year) => {
+  const lastDay = new Date(year, 11, 31)
+  const weekNo = getWeekNumber(lastDay)
+  // 如果12月31日属于下一年的第一周，则返回52或53
+  return weekNo > 52 ? weekNo - 1 : weekNo
+}
+
+// 计算本年剩余周数
+const remainingWeeks = computed(() => {
+  const currentYear = weekDays.value[0]?.getFullYear()
+  const currentWeek = getWeekNumber(weekDays.value[0])
+  const totalWeeks = getTotalWeeksInYear(currentYear)
+  return totalWeeks - currentWeek
+})
 
 // 获取本周所有事件
 const weekEvents = computed(() => {
@@ -211,7 +291,7 @@ watch(events, (newEvents) => {
   <div class="calendar-app">
     <header class="calendar-header">
       <h2 class="current-month">
-        {{ weekDays[0]?.getFullYear() }}年{{ weekDays[0]?.getMonth() + 1 }}月
+        {{ weekDays[0]?.getFullYear() }}年{{ weekDays[0]?.getMonth() + 1 }}月{{ weekDays[0]?.getDate() }}日 - {{ weekDays[6]?.getMonth() + 1 }}月{{ weekDays[6]?.getDate() }}日（第{{ getWeekNumber(weekDays[0]) }}周，本年剩余 {{ remainingWeeks }} 周）
       </h2>
       <div class="header-controls">
         <el-button @click="prevWeek">上一周</el-button>
@@ -223,21 +303,23 @@ watch(events, (newEvents) => {
 
     <div class="calendar-container">
       <!-- 星期标题 -->
-      <div class="week-header">
+      <div class="week-header" ref="weekHeaderRef">
         <div class="time-header"></div>
-        <div v-for="day in weekDays" :key="day.getTime()" class="day-header" :class="{ 'today': isToday(day) }">
+        <div v-for="day in weekDays" :key="day.getTime()" class="day-header" :class="{ 'today': isToday(day), 'weekend': day.getDay() === 0 || day.getDay() === 6 }">
           <div class="day-name">{{ ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][day.getDay() === 0 ? 6 : day.getDay() - 1] }}</div>
           <div class="day-date">{{ formatDate(day) }}</div>
+          <div v-if="day.getDay() === 0 || day.getDay() === 6" class="rest-tag">休息</div>
         </div>
         <div class="event-list-header">本周事件</div>
       </div>
 
-      <!-- 日历主体 -->
-      <div class="calendar-body">
+      <!-- 日历主体 - 包含滚动容器 -->
+      <div class="calendar-scroll-container">
+        <div class="calendar-body" ref="calendarBodyRef" @scroll="onCalendarScroll">
         <!-- 时间轴 -->
         <div class="time-column">
-          <div v-for="slot in timeSlots" :key="`${slot.hour}-${slot.half}`" class="time-label">
-            {{ formatTime(slot.value) }}
+          <div v-for="(hour, index) in timeLabels" :key="hour" class="time-label" :class="{ 'last-label': index === timeLabels.length - 1 }">
+            {{ formatTime(hour) }}
           </div>
         </div>
 
@@ -252,22 +334,17 @@ watch(events, (newEvents) => {
             @mousemove="onDrag($event)"
             @mouseup="endDrag($event, day, slot)"
             @mouseleave="isDragging = false"
+          ></div>
+          <!-- 渲染事件（使用绝对定位） -->
+          <div
+            v-for="event in getDayEventsForRender(day)"
+            :key="event.id"
+            class="event-item-absolute"
+            :style="event.style"
+            @mousedown.stop="openEventDialog(event)"
           >
-            <div class="slot-content">
-              <!-- 渲染该时间段的事件 -->
-              <div
-                v-for="event in getEventsByDay(day).filter(e => e.startTime <= slot.value && e.endTime > slot.value)"
-                :key="event.id"
-                class="event-item"
-                :class="{ 'event-start': Math.abs(event.startTime - slot.value) < 0.01 }"
-                @click.stop="openEventDialog(event)"
-              >
-                <span class="event-time" v-if="Math.abs(event.startTime - slot.value) < 0.01">
-                  {{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}
-                </span>
-                <span class="event-title">{{ event.title }}</span>
-              </div>
-            </div>
+            <span class="event-time">{{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}</span>
+            <span class="event-title">{{ event.title }}</span>
           </div>
         </div>
 
@@ -282,6 +359,7 @@ watch(events, (newEvents) => {
                 class="event-list-item"
                 @click="openEventDialog(event)"
               >
+                <button class="event-delete-btn" @click.stop="deleteEventItem(event)" title="删除事件">×</button>
                 <div class="event-item-header">
                   <span class="event-item-date">{{ event.date }}</span>
                   <span class="event-item-time">{{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}</span>
@@ -291,6 +369,7 @@ watch(events, (newEvents) => {
               </div>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>
@@ -339,6 +418,10 @@ watch(events, (newEvents) => {
 </template>
 
 <style scoped>
+* {
+  box-sizing: border-box;
+}
+
 .calendar-app {
   width: 100vw;
   height: 100vh;
@@ -377,25 +460,38 @@ watch(events, (newEvents) => {
   background: white;
   border-radius: 0;
   box-shadow: none;
+  box-sizing: border-box;
 }
 
 .week-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: 60px repeat(7, 1fr) 300px;
   border-bottom: 1px solid #e0e0e0;
   background: #fafafa;
+  box-sizing: border-box;
+  width: 100%;
+  flex-shrink: 0;
+  /* 预留滚动条宽度 */
+  padding-right: 17px;
+}
+
+.calendar-scroll-container {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .time-header {
-  width: 60px;
-  min-width: 60px;
   border-right: 1px solid #e0e0e0;
+  box-sizing: border-box;
 }
 
 .day-header {
-  flex: 1;
   padding: 15px;
   text-align: center;
   border-right: 1px solid #e0e0e0;
+  box-sizing: border-box;
 }
 
 .day-header:last-child {
@@ -403,8 +499,6 @@ watch(events, (newEvents) => {
 }
 
 .event-list-header {
-  width: 300px;
-  min-width: 300px;
   padding: 15px;
   text-align: center;
   font-size: 14px;
@@ -412,6 +506,7 @@ watch(events, (newEvents) => {
   color: #333;
   border-left: 1px solid #e0e0e0;
   background: #fafafa;
+  box-sizing: border-box;
 }
 
 .day-name {
@@ -435,31 +530,82 @@ watch(events, (newEvents) => {
   color: white;
 }
 
+.day-header.weekend {
+  background: #fff5f5;
+}
+
+.day-header.weekend .day-name {
+  color: #e53e3e;
+  font-weight: 500;
+}
+
+.rest-tag {
+  margin-top: 4px;
+  font-size: 10px;
+  color: #e53e3e;
+  background: #fed7d7;
+  padding: 2px 8px;
+  border-radius: 10px;
+  display: inline-block;
+}
+
+.calendar-scroll-container {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 .calendar-body {
   flex: 1;
-  display: flex;
-  overflow-y: auto;
+  display: grid;
+  grid-template-columns: 60px repeat(7, 1fr) 300px;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+}
+
+/* 强制显示滚动条，确保宽度固定 */
+.calendar-body::-webkit-scrollbar {
+  width: 17px;
+}
+
+.calendar-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.calendar-body::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.calendar-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
 }
 
 .time-column {
-  width: 60px;
-  min-width: 60px;
   border-right: 1px solid #e0e0e0;
+  display: flex;
+  flex-direction: column;
 }
 
 .event-list {
-  width: 300px;
-  min-width: 300px;
   border-left: 1px solid #e0e0e0;
   display: flex;
   flex-direction: column;
   background: #fafafa;
+  box-sizing: border-box;
 }
 
 .event-list-content {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 10px;
+  min-height: 0;
 }
 
 .no-events {
@@ -483,11 +629,40 @@ watch(events, (newEvents) => {
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s;
   border-left: 4px solid #667eea;
+  position: relative;
 }
 
 .event-list-item:hover {
   transform: translateX(2px);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.event-delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: #f56565;
+  color: white;
+  border-radius: 50%;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s, background 0.2s;
+}
+
+.event-list-item:hover .event-delete-btn {
+  opacity: 1;
+}
+
+.event-delete-btn:hover {
+  background: #e53e3e;
 }
 
 .event-item-header {
@@ -525,17 +700,30 @@ watch(events, (newEvents) => {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 5px;
+  padding-top: 0;
   font-size: 12px;
   color: #999;
   border-bottom: 1px solid #f0f0f0;
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.time-label:last-child {
+  height: 30px;
+  border-bottom: none;
+  align-items: center;
+}
+
+.time-column {
+  border-right: 1px solid #e0e0e0;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .day-column {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
   border-right: 1px solid #e0e0e0;
+  position: relative;
+  box-sizing: border-box;
 }
 
 .day-column:last-child {
@@ -548,6 +736,8 @@ watch(events, (newEvents) => {
   cursor: pointer;
   transition: background 0.2s;
   position: relative;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .time-slot.half-hour {
@@ -570,11 +760,11 @@ watch(events, (newEvents) => {
   overflow: hidden;
 }
 
-.event-item {
+.event-item-absolute {
+  position: absolute;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   padding: 4px 8px;
-  margin-bottom: 2px;
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
@@ -582,26 +772,28 @@ watch(events, (newEvents) => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-.event-item:hover {
+.event-item-absolute:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-}
-
-.event-start {
-  border-radius: 4px 4px 0 0;
-  padding-top: 6px;
+  z-index: 10;
 }
 
 .event-time {
   font-size: 10px;
   opacity: 0.9;
   margin-bottom: 2px;
+  display: block;
 }
 
 .event-title {
   font-weight: 500;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -634,6 +826,19 @@ watch(events, (newEvents) => {
 
   .day-header.today {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  }
+
+  .day-header.weekend {
+    background: #3d1f1f;
+  }
+
+  .day-header.weekend .day-name {
+    color: #fc8181;
+  }
+
+  .rest-tag {
+    color: #fc8181;
+    background: #742a2a;
   }
 
   .current-month {
@@ -679,6 +884,14 @@ watch(events, (newEvents) => {
 
   .event-list-item:hover {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+
+  .event-delete-btn {
+    background: #f56565;
+  }
+
+  .event-delete-btn:hover {
+    background: #e53e3e;
   }
 
   .event-item-header {
