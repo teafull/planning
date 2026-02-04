@@ -2,6 +2,20 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElDialog, ElForm, ElFormItem, ElInput, ElDatePicker, ElButton, ElSelect, ElOption } from 'element-plus'
 
+// 事件类型配置
+const eventTypes = [
+  { value: 'task', label: '任务', color: '#667eea', bgColor: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
+  { value: 'meeting', label: '会议', color: '#48bb78', bgColor: 'linear-gradient(135deg, #48bb78 0%, #38a169 100%)' },
+  { value: 'issue', label: '问题', color: '#f56565', bgColor: 'linear-gradient(135deg, #f56565 0%, #e53e3e 100%)' },
+  { value: 'reminder', label: '提醒', color: '#ed8936', bgColor: 'linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)' },
+  { value: 'other', label: '其他', color: '#718096', bgColor: 'linear-gradient(135deg, #718096 0%, #4a5568 100%)' }
+]
+
+// 获取事件类型配置
+const getEventType = (type) => {
+  return eventTypes.find(t => t.value === type) || eventTypes[4] // 默认返回"其他"
+}
+
 // 当前周的开始日期
 const currentWeekStart = ref(new Date())
 
@@ -160,7 +174,8 @@ const endDrag = (e, day, slot) => {
       date: eventDate,
       startTime: startTime,
       endTime: endTime,
-      title: ''
+      title: '',
+      type: 'task'
     }
     // 标记为新创建的事件
     currentEvent.value = tempEvent
@@ -170,7 +185,8 @@ const endDrag = (e, day, slot) => {
       date: tempEvent.date,
       startTime: tempEvent.startTime,
       endTime: tempEvent.endTime,
-      description: ''
+      description: '',
+      type: tempEvent.type
     }
     showDialog.value = true
   }
@@ -187,7 +203,8 @@ const form = ref({
   date: '',
   startTime: 9,
   endTime: 10,
-  description: ''
+  description: '',
+  type: 'task'
 })
 
 // 打开事件弹窗
@@ -198,7 +215,8 @@ const openEventDialog = (event) => {
     date: event.date,
     startTime: event.startTime,
     endTime: event.endTime,
-    description: event.description || ''
+    description: event.description || '',
+    type: event.type || 'task'
   }
   showDialog.value = true
 }
@@ -213,6 +231,7 @@ const saveEvent = () => {
       event.startTime = form.value.startTime
       event.endTime = form.value.endTime
       event.description = form.value.description
+      event.type = form.value.type
     } else {
       // 新事件，添加到事件列表
       events.value.push({
@@ -220,7 +239,8 @@ const saveEvent = () => {
         title: form.value.title,
         startTime: form.value.startTime,
         endTime: form.value.endTime,
-        description: form.value.description
+        description: form.value.description,
+        type: form.value.type
       })
     }
   }
@@ -375,11 +395,12 @@ watch(events, (newEvents) => {
             v-for="event in getDayEventsForRender(day)"
             :key="event.id"
             class="event-item-absolute"
-            :style="event.style"
+            :style="{ ...event.style, background: getEventType(event.type).bgColor }"
             @mousedown.stop="openEventDialog(event)"
           >
             <span class="event-time">{{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}</span>
             <span class="event-title">{{ event.title }}</span>
+            <span class="event-type-tag">{{ getEventType(event.type).label }}</span>
           </div>
         </div>
 
@@ -392,10 +413,12 @@ watch(events, (newEvents) => {
                 v-for="event in weekEvents"
                 :key="event.id"
                 class="event-list-item"
+                :style="{ borderLeftColor: getEventType(event.type).color }"
                 @click="openEventDialog(event)"
               >
                 <button class="event-delete-btn" @click.stop="deleteEventItem(event)" title="删除事件">×</button>
                 <div class="event-item-header">
+                  <span class="event-item-type">{{ getEventType(event.type).label }}</span>
                   <span class="event-item-date">{{ event.date }}</span>
                   <span class="event-item-time">{{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}</span>
                 </div>
@@ -412,6 +435,13 @@ watch(events, (newEvents) => {
     <!-- 事件编辑弹窗 -->
     <el-dialog v-model="showDialog" title="编辑事件" width="500px">
       <el-form :model="form" label-width="80px">
+        <el-form-item label="事件类型">
+          <el-radio-group v-model="form.type">
+            <el-radio v-for="type in eventTypes" :key="type.value" :label="type.value">
+              {{ type.label }}
+            </el-radio>
+          </el-radio-group>
+        </el-form-item>
         <el-form-item label="事件名称">
           <el-input v-model="form.title" placeholder="输入事件名称" />
         </el-form-item>
@@ -707,6 +737,17 @@ watch(events, (newEvents) => {
   margin-bottom: 8px;
   font-size: 12px;
   color: #666;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.event-item-type {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #667eea;
+  color: white;
+  font-weight: 500;
 }
 
 .event-item-date {
@@ -808,12 +849,23 @@ watch(events, (newEvents) => {
   text-overflow: ellipsis;
   white-space: nowrap;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .event-item-absolute:hover {
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
   z-index: 10;
+}
+
+.event-type-tag {
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 1px 6px;
+  border-radius: 8px;
+  white-space: nowrap;
 }
 
 .event-time {
@@ -933,6 +985,10 @@ watch(events, (newEvents) => {
     color: #999;
   }
 
+  .event-item-type {
+    opacity: 0.9;
+  }
+
   .event-item-time {
     color: #667eea;
   }
@@ -948,5 +1004,20 @@ watch(events, (newEvents) => {
   .no-events {
     color: #666;
   }
+}
+
+/* 单选框样式优化 */
+:deep(.el-radio-group) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+:deep(.el-radio) {
+  margin-right: 0;
+}
+
+:deep(.el-radio__label) {
+  font-size: 13px;
 }
 </style>
