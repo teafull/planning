@@ -26,7 +26,7 @@ const onCalendarScroll = () => {
 
 // 每小时半小时时间片数
 const HALF_HOUR_SLOTS = 2
-const START_HOUR = 6
+const START_HOUR = 8
 const END_HOUR = 22
 
 // 计算当前周的日期（周一到周日）
@@ -142,15 +142,34 @@ const endDrag = (e, day, slot) => {
 
   const endValue = slot.value
 
+  // 使用拖拽起始的日期，确保事件在正确的一天
   if (dragDay.value && dragStartTime.value !== null) {
+    const eventDate = dragDay.value.toISOString().split('T')[0]
+    const startTime = Math.min(dragStartTime.value, endValue)
+    let endTime = Math.max(dragStartTime.value, endValue)
+
+    // 至少需要30分钟的时长
+    if (endTime - startTime < 0.5) {
+      // 如果时长不足30分钟，自动扩展到30分钟
+      endTime = startTime + 0.5
+    }
+
     const newEvent = {
       id: Date.now(),
-      date: day.toISOString().split('T')[0],
-      startTime: Math.min(dragStartTime.value, endValue),
-      endTime: Math.max(dragStartTime.value, endValue),
+      date: eventDate,
+      startTime: startTime,
+      endTime: endTime,
       title: '新事件'
     }
     events.value.push(newEvent)
+    // 初始化表单值为新事件的值
+    form.value = {
+      title: newEvent.title,
+      date: newEvent.date,
+      startTime: newEvent.startTime,
+      endTime: newEvent.endTime,
+      description: ''
+    }
     showDialog.value = true
     currentEvent.value = newEvent
   }
