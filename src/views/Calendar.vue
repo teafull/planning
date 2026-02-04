@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { ElDialog, ElForm, ElFormItem, ElInput, ElDatePicker, ElButton, ElSelect, ElOption } from 'element-plus'
+import { ElDialog, ElForm, ElFormItem, ElInput, ElDatePicker, ElButton, ElSelect, ElOption, ElTooltip } from 'element-plus'
 
 // 事件类型配置
 const eventTypes = [
@@ -134,6 +134,23 @@ const getDayEventsForRender = (day) => {
     ...event,
     style: getEventStyle(event)
   }))
+}
+
+// 获取事件详细信息HTML
+const getEventDetailHtml = (event) => {
+  return `
+    <div class="event-tooltip">
+      <div class="tooltip-type" style="background: ${getEventType(event.type).color}">
+        ${getEventType(event.type).label}
+      </div>
+      <div class="tooltip-title">${event.title || '无标题'}</div>
+      <div class="tooltip-time">
+        📅 ${event.date}<br>
+        ⏰ ${formatTime(event.startTime)} - ${formatTime(event.endTime)}
+      </div>
+      ${event.description ? `<div class="tooltip-desc">${event.description}</div>` : ''}
+    </div>
+  `
 }
 
 // 开始拖拽
@@ -391,17 +408,24 @@ watch(events, (newEvents) => {
             @mouseleave="isDragging = false"
           ></div>
           <!-- 渲染事件（使用绝对定位） -->
-          <div
+          <el-tooltip
             v-for="event in getDayEventsForRender(day)"
             :key="event.id"
-            class="event-item-absolute"
-            :style="{ ...event.style, background: getEventType(event.type).bgColor }"
-            @mousedown.stop="openEventDialog(event)"
+            :content="getEventDetailHtml(event)"
+            raw-content
+            placement="top"
+            :show-after="200"
           >
-            <span class="event-time">{{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}</span>
-            <span class="event-title">{{ event.title }}</span>
-            <span class="event-type-tag">{{ getEventType(event.type).label }}</span>
-          </div>
+            <div
+              class="event-item-absolute"
+              :style="{ ...event.style, background: getEventType(event.type).bgColor }"
+              @mousedown.stop="openEventDialog(event)"
+            >
+              <span class="event-time">{{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}</span>
+              <span class="event-title">{{ event.title }}</span>
+              <span class="event-type-tag">{{ getEventType(event.type).label }}</span>
+            </div>
+          </el-tooltip>
         </div>
 
         <!-- 本周事件列表 -->
@@ -409,22 +433,29 @@ watch(events, (newEvents) => {
           <div class="event-list-content">
             <div v-if="weekEvents.length === 0" class="no-events">暂无事件</div>
             <div v-else class="events-container">
-              <div
+              <el-tooltip
                 v-for="event in weekEvents"
                 :key="event.id"
-                class="event-list-item"
-                :style="{ borderLeftColor: getEventType(event.type).color }"
-                @click="openEventDialog(event)"
+                :content="getEventDetailHtml(event)"
+                raw-content
+                placement="right"
+                :show-after="200"
               >
-                <button class="event-delete-btn" @click.stop="deleteEventItem(event)" title="删除事件">×</button>
-                <div class="event-item-header">
-                  <span class="event-item-type">{{ getEventType(event.type).label }}</span>
-                  <span class="event-item-date">{{ event.date }}</span>
-                  <span class="event-item-time">{{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}</span>
+                <div
+                  class="event-list-item"
+                  :style="{ borderLeftColor: getEventType(event.type).color }"
+                  @click="openEventDialog(event)"
+                >
+                  <button class="event-delete-btn" @click.stop="deleteEventItem(event)" title="删除事件">×</button>
+                  <div class="event-item-header">
+                    <span class="event-item-type">{{ getEventType(event.type).label }}</span>
+                    <span class="event-item-date">{{ event.date }}</span>
+                    <span class="event-item-time">{{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}</span>
+                  </div>
+                  <div class="event-item-title">{{ event.title }}</div>
+                  <div v-if="event.description" class="event-item-description">{{ event.description }}</div>
                 </div>
-                <div class="event-item-title">{{ event.title }}</div>
-                <div v-if="event.description" class="event-item-description">{{ event.description }}</div>
-              </div>
+              </el-tooltip>
             </div>
           </div>
         </div>
@@ -1004,6 +1035,43 @@ watch(events, (newEvents) => {
   .no-events {
     color: #666;
   }
+}
+
+/* Tooltip 样式 */
+.event-tooltip {
+  padding: 12px;
+  line-height: 1.6;
+}
+
+.tooltip-type {
+  display: inline-block;
+  color: white;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.tooltip-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.tooltip-time {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.tooltip-desc {
+  font-size: 12px;
+  color: #999;
+  padding-top: 8px;
+  border-top: 1px solid #e0e0e0;
 }
 
 /* 单选框样式优化 */
