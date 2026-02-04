@@ -136,6 +136,14 @@ const getDayEventsForRender = (day) => {
   }))
 }
 
+// 获取可选的结束时间（必须大于开始时间）
+const availableEndTimes = computed(() => {
+  if (!form.value.startTime || form.value.startTime === '') {
+    return timeSlots.value
+  }
+  return timeSlots.value.filter(slot => slot.value > form.value.startTime)
+})
+
 // 获取事件详细信息HTML
 const getEventDetailHtml = (event) => {
   return `
@@ -357,6 +365,15 @@ onMounted(() => {
 watch(events, (newEvents) => {
   localStorage.setItem('calendar-events', JSON.stringify(newEvents))
 }, { deep: true })
+
+// 监听开始时间变化，自动调整结束时间
+watch(() => form.value.startTime, (newStartTime) => {
+  if (form.value.endTime && form.value.endTime <= newStartTime) {
+    // 如果结束时间小于等于开始时间，设置为下一个时间段
+    const nextSlot = timeSlots.value.find(slot => slot.value > newStartTime)
+    form.value.endTime = nextSlot ? nextSlot.value : newStartTime + 0.5
+  }
+})
 </script>
 
 <template>
@@ -492,7 +509,7 @@ watch(events, (newEvents) => {
         </el-form-item>
         <el-form-item label="结束时间">
           <el-select v-model="form.endTime" placeholder="选择结束时间">
-            <el-option v-for="slot in timeSlots" :key="slot.value" :label="formatTime(slot.value)" :value="slot.value" />
+            <el-option v-for="slot in availableEndTimes" :key="slot.value" :label="formatTime(slot.value)" :value="slot.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="描述">
