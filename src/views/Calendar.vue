@@ -154,24 +154,25 @@ const endDrag = (e, day, slot) => {
       endTime = startTime + 0.5
     }
 
-    const newEvent = {
+    // 创建临时事件对象（暂不添加到事件列表）
+    const tempEvent = {
       id: Date.now(),
       date: eventDate,
       startTime: startTime,
       endTime: endTime,
-      title: '新事件'
+      title: ''
     }
-    events.value.push(newEvent)
+    // 标记为新创建的事件
+    currentEvent.value = tempEvent
     // 初始化表单值为新事件的值
     form.value = {
-      title: newEvent.title,
-      date: newEvent.date,
-      startTime: newEvent.startTime,
-      endTime: newEvent.endTime,
+      title: tempEvent.title,
+      date: tempEvent.date,
+      startTime: tempEvent.startTime,
+      endTime: tempEvent.endTime,
       description: ''
     }
     showDialog.value = true
-    currentEvent.value = newEvent
   }
 
   dragStartTime.value = null
@@ -207,10 +208,20 @@ const saveEvent = () => {
   if (currentEvent.value) {
     const event = events.value.find(e => e.id === currentEvent.value.id)
     if (event) {
+      // 已存在的事件，更新它
       event.title = form.value.title
       event.startTime = form.value.startTime
       event.endTime = form.value.endTime
       event.description = form.value.description
+    } else {
+      // 新事件，添加到事件列表
+      events.value.push({
+        ...currentEvent.value,
+        title: form.value.title,
+        startTime: form.value.startTime,
+        endTime: form.value.endTime,
+        description: form.value.description
+      })
     }
   }
   showDialog.value = false
@@ -219,7 +230,12 @@ const saveEvent = () => {
 // 删除事件
 const deleteEvent = () => {
   if (currentEvent.value) {
-    events.value = events.value.filter(e => e.id !== currentEvent.value.id)
+    const event = events.value.find(e => e.id === currentEvent.value.id)
+    if (event) {
+      // 已存在的事件，删除它
+      events.value = events.value.filter(e => e.id !== currentEvent.value.id)
+    }
+    // 新事件直接关闭弹窗即可（不需要删除，因为还没添加）
   }
   showDialog.value = false
 }
