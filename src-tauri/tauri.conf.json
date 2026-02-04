@@ -12,14 +12,15 @@
   "app": {
     "windows": [
       {
-        "title": "planning",
+        "title": "日程管理",
         "width": 1400,
         "height": 900
       }
     ],
     "security": {
       "csp": null
-    }
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,

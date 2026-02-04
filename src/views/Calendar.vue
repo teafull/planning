@@ -1,6 +1,7 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
-import { ElDialog, ElForm, ElFormItem, ElInput, ElDatePicker, ElButton, ElSelect, ElOption, ElTooltip } from 'element-plus'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ElDialog, ElForm, ElFormItem, ElInput, ElDatePicker, ElButton, ElSelect, ElOption, ElTooltip, ElNotification, ElSwitch } from 'element-plus'
+import { sendNotification, requestPermission, isPermissionGranted } from '@tauri-apps/plugin-notification'
 
 // 事件类型配置
 const eventTypes = [
@@ -22,6 +23,11 @@ const currentWeekStart = ref(new Date())
 // 事件数据
 const events = ref([])
 
+// 提醒开关
+const reminderEnabled = ref(true)
+let reminderInterval = null
+const notifiedEvents = ref(new Set()) // 记录已通知的事件ID
+
 // 拖拽状态
 const isDragging = ref(false)
 const dragStartTime = ref(null)
@@ -40,7 +46,7 @@ const onCalendarScroll = () => {
 
 // 每小时半小时时间片数
 const HALF_HOUR_SLOTS = 2
-const START_HOUR = 8
+const START_HOUR = 0
 const END_HOUR = 22
 
 // 计算当前周的日期（周一到周日）
@@ -359,6 +365,14 @@ onMounted(() => {
   if (savedEvents) {
     events.value = JSON.parse(savedEvents)
   }
+
+  // 启动提醒检查
+  startReminderCheck()
+
+  // 组件卸载时清理定时器
+  onUnmounted(() => {
+    stopReminderCheck()
+  })
 })
 
 // 监听 events 变化并保存到本地存储
@@ -374,6 +388,124 @@ watch(() => form.value.startTime, (newStartTime) => {
     form.value.endTime = nextSlot ? nextSlot.value : newStartTime + 0.5
   }
 })
+
+// 发送提醒通知
+const sendEventReminder = async (event) => {
+  try {
+    const hasPermission = await isPermissionGranted()
+    if (!hasPermission) {
+      await requestPermission()
+    }
+
+    await sendNotification({
+      title: '日程提醒',
+      body: `${event.title} (${getEventType(event.type).label})`,
+      icon: null
+    })
+
+    console.log('提醒已发送:', event.title)
+  } catch (error) {
+    console.error('发送提醒失败:', error)
+    ElNotification({
+      title: '日程提醒',
+      message: event.title,
+      type: 'info',
+      duration: 5000
+    })
+  }
+}
+
+// 测试提醒
+const testReminder = async () => {
+  const testEvent = {
+    title: '测试提醒',
+    type: 'reminder'
+  }
+
+  try {
+    const hasPermission = await isPermissionGranted()
+    if (!hasPermission) {
+      await requestPermission()
+    }
+
+    await sendNotification({
+      title: '日程提醒',
+      body: `${testEvent.title} - 这是一个测试通知`,
+      icon: null
+    })
+
+    ElNotification({
+      title: '成功',
+      message: '测试提醒已发送',
+      type: 'success',
+      duration: 2000
+    })
+  } catch (error) {
+    console.error('发送测试提醒失败:', error)
+    ElNotification({
+      title: '测试提醒',
+      message: '这是一个应用内通知测试',
+      type: 'info',
+      duration: 5000
+    })
+  }
+}
+
+// 检查需要提醒的事件
+const checkReminders = () => {
+  if (!reminderEnabled.value) return
+
+  const now = new Date()
+  const todayStr = now.toISOString().split('T')[0]
+  const currentHour = now.getHours()
+  const currentMinute = now.getMinutes()
+  const currentTime = currentHour + currentMinute / 60
+
+  // 检查当前时间段前5分钟内的事件
+  events.value.forEach(event => {
+    if (event.date === todayStr) {
+      const reminderTime = event.startTime - 5/60 // 提前5分钟提醒
+      const eventKey = `${event.id}-${todayStr}`
+
+      // 如果事件还未通知，且到达提醒时间
+      if (!notifiedEvents.value.has(eventKey) && currentTime >= reminderTime && currentTime < event.startTime) {
+        sendEventReminder(event)
+        notifiedEvents.value.add(eventKey)
+      }
+    }
+  })
+
+  // 清理过期的通知记录（超过1天的记录）
+  const oldDate = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+  notifiedEvents.value.forEach(key => {
+    if (key.includes(oldDate)) {
+      notifiedEvents.value.delete(key)
+    }
+  })
+}
+
+// 启动提醒检查
+const startReminderCheck = () => {
+  // 每分钟检查一次
+  reminderInterval = setInterval(checkReminders, 60 * 1000)
+}
+
+// 停止提醒检查
+const stopReminderCheck = () => {
+  if (reminderInterval) {
+    clearInterval(reminderInterval)
+    reminderInterval = null
+  }
+}
+
+// 监听提醒开关
+watch(reminderEnabled, (enabled) => {
+  if (enabled) {
+    startReminderCheck()
+  } else {
+    stopReminderCheck()
+  }
+})
 </script>
 
 <template>
@@ -383,6 +515,11 @@ watch(() => form.value.startTime, (newStartTime) => {
         {{ weekDays[0]?.getFullYear() }}年{{ weekDays[0]?.getMonth() + 1 }}月{{ weekDays[0]?.getDate() }}日 - {{ weekDays[6]?.getMonth() + 1 }}月{{ weekDays[6]?.getDate() }}日（第{{ getWeekNumber(weekDays[0]) }}周，本年剩余 {{ remainingWeeks }} 周）
       </h2>
       <div class="header-controls">
+        <div class="reminder-control">
+          <span class="reminder-label">提醒</span>
+          <el-switch v-model="reminderEnabled" />
+          <el-button size="small" @click="testReminder" type="primary" plain>测试</el-button>
+        </div>
         <el-button @click="prevWeek">上一周</el-button>
         <el-button @click="goToToday">本周</el-button>
         <el-button @click="nextWeek">下一周</el-button>
@@ -555,6 +692,21 @@ watch(() => form.value.startTime, (newStartTime) => {
 .header-controls {
   display: flex;
   gap: 10px;
+  align-items: center;
+}
+
+.reminder-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 10px;
+  padding-right: 10px;
+  border-right: 1px solid #e0e0e0;
+}
+
+.reminder-label {
+  font-size: 14px;
+  color: #666;
 }
 
 .current-month {
