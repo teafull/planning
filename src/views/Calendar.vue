@@ -399,7 +399,7 @@ const sendEventReminder = async (event) => {
 
     await sendNotification({
       title: '日程提醒',
-      body: `${event.title} (${getEventType(event.type).label})`,
+      body: `事件标题：${event.title} (${getEventType(event.type).label}) \n事件内容：${event.description}`,
       icon: null
     })
 
@@ -419,36 +419,10 @@ const sendEventReminder = async (event) => {
 const testReminder = async () => {
   const testEvent = {
     title: '测试提醒',
-    type: 'reminder'
+    type: 'reminder',
+    description: "这是一个测试提醒"
   }
-
-  try {
-    const hasPermission = await isPermissionGranted()
-    if (!hasPermission) {
-      await requestPermission()
-    }
-
-    await sendNotification({
-      title: '日程提醒',
-      body: `${testEvent.title} - 这是一个测试通知`,
-      icon: null
-    })
-
-    ElNotification({
-      title: '成功',
-      message: '测试提醒已发送',
-      type: 'success',
-      duration: 2000
-    })
-  } catch (error) {
-    console.error('发送测试提醒失败:', error)
-    ElNotification({
-      title: '测试提醒',
-      message: '这是一个应用内通知测试',
-      type: 'info',
-      duration: 5000
-    })
-  }
+  await sendEventReminder(testEvent);
 }
 
 // 检查需要提醒的事件
@@ -622,7 +596,7 @@ watch(reminderEnabled, (enabled) => {
       <el-form :model="form" label-width="80px">
         <el-form-item label="事件类型">
           <el-radio-group v-model="form.type">
-            <el-radio v-for="type in eventTypes" :key="type.value" :label="type.value">
+            <el-radio v-for="type in eventTypes" :key="type.value" :value="type.value">
               {{ type.label }}
             </el-radio>
           </el-radio-group>
