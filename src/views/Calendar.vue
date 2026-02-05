@@ -46,8 +46,8 @@ const onCalendarScroll = () => {
 
 // 每小时半小时时间片数
 const HALF_HOUR_SLOTS = 2
-const START_HOUR = 0
-const END_HOUR = 22
+const START_HOUR = 8
+const END_HOUR = 23
 
 // 计算当前周的日期（周一到周日）
 const weekDays = computed(() => {
@@ -113,33 +113,104 @@ const getEventsByDay = (day) => {
   return events.value.filter(event => event.date === dayStr)
 }
 
-// 计算事件的位置和高度
-const getEventStyle = (event) => {
-  const startSlotIndex = timeSlots.value.findIndex(slot => Math.abs(slot.value - event.startTime) < 0.001)
-  const endSlotIndex = timeSlots.value.findIndex(slot => Math.abs(slot.value - event.endTime) < 0.001)
-
-  if (startSlotIndex === -1 || endSlotIndex === -1) {
-    return {}
-  }
-
-  const top = startSlotIndex * 30
-  const height = (endSlotIndex - startSlotIndex) * 30
-
-  return {
-    position: 'absolute',
-    top: `${top}px`,
-    height: `${height}px`,
-    left: '4px',
-    right: '4px'
-  }
-}
-
-// 每天的事件列表（用于绝对定位渲染）
+// 计算事件的位置和高度（支持并行事件）
 const getDayEventsForRender = (day) => {
-  return getEventsByDay(day).map(event => ({
-    ...event,
-    style: getEventStyle(event)
-  }))
+  const dayEvents = getEventsByDay(day)
+  if (dayEvents.length === 0) return []
+
+  // 为每个事件计算时间槽索引
+  const eventsWithSlots = dayEvents.map(event => {
+    const startSlotIndex = timeSlots.value.findIndex(slot => Math.abs(slot.value - event.startTime) < 0.001)
+    const endSlotIndex = timeSlots.value.findIndex(slot => Math.abs(slot.value - event.endTime) < 0.001)
+    return {
+      event,
+      startSlotIndex,
+      endSlotIndex
+    }
+  }).filter(e => e.startSlotIndex !== -1 && e.endSlotIndex !== -1)
+
+  // 按开始时间排序
+  eventsWithSlots.sort((a, b) => a.startSlotIndex - b.startSlotIndex)
+
+  // 为事件分配列和宽度
+  const columns = [] // 每列的事件 [ { eventId, startSlotIndex, endSlotIndex, columnIndex } ]
+  const maxColumnsPerSlot = new Map() // 记录每个时间槽需要的最大列数
+
+  eventsWithSlots.forEach(({ event, startSlotIndex, endSlotIndex }) => {
+    let columnIndex = 0
+    let foundColumn = false
+
+    // 尝试在现有列中找到可以放置的位置
+    while (!foundColumn) {
+      let canUseColumn = true
+
+      // 检查该列中是否有与当前事件重叠的事件
+      for (const colEvent of columns) {
+        if (colEvent.columnIndex === columnIndex) {
+          // 判断时间是否重叠
+          const isOverlapping = !(endSlotIndex <= colEvent.startSlotIndex || startSlotIndex >= colEvent.endSlotIndex)
+          if (isOverlapping) {
+            canUseColumn = false
+            break
+          }
+        }
+      }
+
+      if (canUseColumn) {
+        foundColumn = true
+      } else {
+        columnIndex++
+      }
+    }
+
+    // 将事件放入该列
+    columns.push({
+      eventId: event.id,
+      startSlotIndex,
+      endSlotIndex,
+      columnIndex
+    })
+
+    // 更新每个时间槽的最大列数
+    for (let i = startSlotIndex; i < endSlotIndex; i++) {
+      const currentMax = maxColumnsPerSlot.get(i) || 0
+      maxColumnsPerSlot.set(i, Math.max(currentMax, columnIndex + 1))
+    }
+  })
+
+  // 计算每个事件的样式
+  return eventsWithSlots.map(({ event, startSlotIndex, endSlotIndex }) => {
+    const columnData = columns.find(c => c.eventId === event.id)
+    if (!columnData) return { ...event, style: {} }
+
+    const top = startSlotIndex * 30
+    const height = (endSlotIndex - startSlotIndex) * 30
+
+    // 找到该事件覆盖的所有时间槽中的最大列数
+    let maxColsInTimeRange = 1
+    for (let i = startSlotIndex; i < endSlotIndex; i++) {
+      maxColsInTimeRange = Math.max(maxColsInTimeRange, maxColumnsPerSlot.get(i) || 1)
+    }
+
+    // 计算宽度和位置
+    const padding = 4
+    const availableWidth = 100 - (padding * 2)
+    const columnWidth = availableWidth / maxColsInTimeRange
+    const left = padding + (columnData.columnIndex * columnWidth)
+    const right = 100 - (left + columnWidth)
+
+    return {
+      ...event,
+      style: {
+        position: 'absolute',
+        top: `${top}px`,
+        height: `${height}px`,
+        left: `${left}%`,
+        width: `${columnWidth}%`,
+        padding: '0 2px'
+      }
+    }
+  })
 }
 
 // 获取可选的结束时间（必须大于开始时间）
@@ -1014,7 +1085,7 @@ watch(reminderEnabled, (enabled) => {
   position: absolute;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
-  padding: 4px 8px;
+  padding: 4px 4px;
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
@@ -1025,7 +1096,9 @@ watch(reminderEnabled, (enabled) => {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .event-item-absolute:hover {
@@ -1045,16 +1118,16 @@ watch(reminderEnabled, (enabled) => {
 .event-time {
   font-size: 10px;
   opacity: 0.9;
-  margin-bottom: 2px;
-  display: block;
+  flex-shrink: 0;
 }
 
 .event-title {
   font-weight: 500;
-  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
 @media (prefers-color-scheme: dark) {
