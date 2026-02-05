@@ -399,7 +399,7 @@ const sendEventReminder = async (event) => {
 
     await sendNotification({
       title: '日程提醒',
-      body: `事件标题：${event.title} (${getEventType(event.type).label}) \n事件内容：${event.description}`,
+      body: `事件标题:${event.title} (${getEventType(event.type).label}) \n事件内容:${event.description}`,
       icon: null
     })
 
