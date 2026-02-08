@@ -1203,7 +1203,8 @@ const allDayEventsRowCount = computed(() => {
 }
 
 .event-list-header {
-  padding: 15px;
+  height: 28px;
+  padding: 1px;
   text-align: center;
   font-size: 14px;
   font-weight: 600;
