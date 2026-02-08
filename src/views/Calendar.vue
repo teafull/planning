@@ -547,6 +547,20 @@ const weekEvents = computed(() => {
   })
 })
 
+// 本周事件统计
+const weekStatistics = computed(() => {
+  const eventsList = weekEvents.value
+  const totalCount = eventsList.length
+  const allDayCount = eventsList.filter(e => e.isAllDay).length
+  const multiDayCount = eventsList.filter(e => e.isAllDay && e.endDate && e.endDate !== e.date).length
+  
+  return {
+    totalCount,
+    allDayCount,
+    multiDayCount
+  }
+})
+
 onMounted(() => {
   const savedEvents = localStorage.getItem('calendar-events')
   if (savedEvents) {
@@ -764,6 +778,11 @@ const allDayEventsRowCount = computed(() => {
           <span class="reminder-label">提醒</span>
           <el-switch v-model="reminderEnabled" />
           <el-button size="small" @click="testReminder" type="primary" plain>测试</el-button>
+        </div>
+        <div class="statistics-info">
+          <span class="stat-item">总事件: {{ weekStatistics.totalCount }}</span>
+          <span class="stat-item">全天: {{ weekStatistics.allDayCount }}</span>
+          <span class="stat-item">跨天: {{ weekStatistics.multiDayCount }}</span>
         </div>
         <el-button @click="prevWeek">上一周</el-button>
         <el-button @click="goToToday">本周</el-button>
@@ -1014,6 +1033,21 @@ const allDayEventsRowCount = computed(() => {
 .reminder-label {
   font-size: 14px;
   color: #666;
+}
+
+.statistics-info {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-right: 15px;
+  padding-right: 15px;
+  border-right: 1px solid #e0e0e0;
+}
+
+.stat-item {
+  font-size: 13px;
+  color: #666;
+  white-space: nowrap;
 }
 
 .current-month {
