@@ -1217,7 +1217,10 @@ const allDayEventsRowCount = computed(() => {
 
 .event-list-header {
   height: 28px;
-  padding: 1px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   font-size: 14px;
   font-weight: 600;
@@ -1632,9 +1635,9 @@ const allDayEventsRowCount = computed(() => {
   border-right: 1px solid #e0e0e0;
   box-sizing: border-box;
   display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  padding: 10px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
 
 .all-day-label {
