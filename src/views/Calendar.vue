@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElDialog, ElForm, ElFormItem, ElInput, ElDatePicker, ElButton, ElSelect, ElOption, ElTooltip, ElNotification, ElSwitch } from 'element-plus'
+import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { sendNotification, requestPermission, isPermissionGranted } from '@tauri-apps/plugin-notification'
 
 // 事件类型配置
@@ -9,7 +10,6 @@ const eventTypes = [
   { value: 'meeting', label: '会议', color: '#48bb78', bgColor: 'linear-gradient(135deg, #48bb78 0%, #38a169 100%)' },
   { value: 'issue', label: '问题', color: '#f56565', bgColor: 'linear-gradient(135deg, #f56565 0%, #e53e3e 100%)' },
   { value: 'reminder', label: '提醒', color: '#ed8936', bgColor: 'linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)' },
-  { value: 'allDay', label: '全天', color: '#9f7aea', bgColor: 'linear-gradient(135deg, #9f7aea 0%, #805ad5 100%)' },
   { value: 'other', label: '其他', color: '#718096', bgColor: 'linear-gradient(135deg, #718096 0%, #4a5568 100%)' }
 ]
 
@@ -918,6 +918,7 @@ const allDayEventsRowCount = computed(() => {
             end-placeholder="结束日期"
             format="YYYY/MM/DD"
             value-format="YYYY-MM-DD"
+            :locale="zhCn"
           />
         </el-form-item>
         <el-form-item label="日期" v-if="!form.isAllDay">
@@ -927,6 +928,7 @@ const allDayEventsRowCount = computed(() => {
             placeholder="选择日期"
             format="YYYY/MM/DD"
             value-format="YYYY-MM-DD"
+            :locale="zhCn"
           />
         </el-form-item>
         <template v-if="!form.isAllDay">
@@ -1028,6 +1030,7 @@ const allDayEventsRowCount = computed(() => {
   box-sizing: border-box;
   width: 100%;
   flex-shrink: 0;
+  height: 28px;
 }
 
 .calendar-scroll-container {
@@ -1040,13 +1043,19 @@ const allDayEventsRowCount = computed(() => {
 .time-header {
   border-right: 1px solid #e0e0e0;
   box-sizing: border-box;
+  height: 28px;
 }
 
 .day-header {
-  padding: 15px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   text-align: center;
   border-right: 1px solid #e0e0e0;
   box-sizing: border-box;
+  height: 28px;
 }
 
 .day-header:last-child {
@@ -1054,13 +1063,12 @@ const allDayEventsRowCount = computed(() => {
 }
 
 .day-name {
-  font-size: 14px;
+  font-size: 13px;
   color: #666;
-  margin-bottom: 5px;
 }
 
 .day-date {
-  font-size: 18px;
+  font-size: 14px;
   font-weight: 600;
   color: #333;
 }
@@ -1084,13 +1092,13 @@ const allDayEventsRowCount = computed(() => {
 }
 
 .rest-tag {
-  margin-top: 4px;
   font-size: 10px;
   color: #e53e3e;
   background: #fed7d7;
-  padding: 2px 8px;
+  padding: 1px 6px;
   border-radius: 10px;
   display: inline-block;
+  white-space: nowrap;
 }
 
 .calendar-scroll-container {
