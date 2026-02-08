@@ -296,10 +296,10 @@ const startDragAllDay = (e, day) => {
 
   // 标记为新创建的事件
   currentEvent.value = tempEvent
-  // 初始化表单值为新事件的值
+  // 初始化表单值为新事件的值（使用日期范围格式）
   form.value = {
     title: tempEvent.title,
-    date: tempEvent.date,
+    date: [tempEvent.date, tempEvent.endDate],
     endDate: tempEvent.endDate,
     startTime: tempEvent.startTime,
     endTime: tempEvent.endTime,
@@ -383,7 +383,7 @@ const openEventDialog = (event) => {
   currentEvent.value = event
   form.value = {
     title: event.title,
-    date: event.date,
+    date: event.isAllDay ? [event.date, event.endDate || event.date] : event.date,
     endDate: event.endDate || event.date,
     startTime: event.startTime || 9,
     endTime: event.endTime || 10,
@@ -401,28 +401,52 @@ const saveEvent = () => {
     if (event) {
       // 已存在的事件，更新它
       event.title = form.value.title
-      event.date = form.value.date
-      if (form.value.isAllDay) {
-        event.endDate = form.value.endDate || form.value.date
-      }
-      event.startTime = form.value.startTime
-      event.endTime = form.value.endTime
-      event.description = form.value.description
       event.type = form.value.type
       event.isAllDay = form.value.isAllDay
+      event.description = form.value.description
+
+      if (form.value.isAllDay) {
+        // 全天事件：处理日期范围
+        if (Array.isArray(form.value.date)) {
+          event.date = form.value.date[0]
+          event.endDate = form.value.date[1] || form.value.date[0]
+        } else {
+          event.date = form.value.date
+          event.endDate = form.value.endDate || form.value.date
+        }
+      } else {
+        // 非全天事件：处理时间和日期
+        event.date = form.value.date
+        event.startTime = form.value.startTime
+        event.endTime = form.value.endTime
+      }
     } else {
       // 新事件，添加到事件列表
-      events.value.push({
+      const newEvent = {
         ...currentEvent.value,
         title: form.value.title,
-        date: form.value.date,
-        endDate: form.value.isAllDay ? (form.value.endDate || form.value.date) : undefined,
-        startTime: form.value.startTime,
-        endTime: form.value.endTime,
-        description: form.value.description,
         type: form.value.type,
-        isAllDay: form.value.isAllDay
-      })
+        isAllDay: form.value.isAllDay,
+        description: form.value.description
+      }
+
+      if (form.value.isAllDay) {
+        // 全天事件：处理日期范围
+        if (Array.isArray(form.value.date)) {
+          newEvent.date = form.value.date[0]
+          newEvent.endDate = form.value.date[1] || form.value.date[0]
+        } else {
+          newEvent.date = form.value.date
+          newEvent.endDate = form.value.endDate || form.value.date
+        }
+      } else {
+        // 非全天事件：处理时间和日期
+        newEvent.date = form.value.date
+        newEvent.startTime = form.value.startTime
+        newEvent.endTime = form.value.endTime
+      }
+
+      events.value.push(newEvent)
     }
   }
   showDialog.value = false
@@ -886,23 +910,21 @@ const allDayEventsRowCount = computed(() => {
         <el-form-item label="事件名称">
           <el-input v-model="form.title" placeholder="输入事件名称" />
         </el-form-item>
-        <el-form-item label="日期">
+        <el-form-item label="事件周期" v-if="form.isAllDay">
           <el-date-picker
             v-model="form.date"
-            type="date"
-            placeholder="选择日期"
+            type="daterange"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
             format="YYYY/MM/DD"
             value-format="YYYY-MM-DD"
           />
         </el-form-item>
-        <el-form-item label="全天事件">
-          <el-switch v-model="form.isAllDay" />
-        </el-form-item>
-        <el-form-item v-if="form.isAllDay" label="结束日期">
+        <el-form-item label="日期" v-if="!form.isAllDay">
           <el-date-picker
-            v-model="form.endDate"
+            v-model="form.date"
             type="date"
-            placeholder="选择结束日期"
+            placeholder="选择日期"
             format="YYYY/MM/DD"
             value-format="YYYY-MM-DD"
           />
