@@ -586,45 +586,49 @@ watch(reminderEnabled, (enabled) => {
 
       <!-- 日历主体 - 包含滚动容器 -->
       <div class="calendar-scroll-container">
-        <div class="calendar-body" ref="calendarBodyRef" @scroll="onCalendarScroll">
-        <!-- 时间轴 -->
-        <div class="time-column">
-          <div v-for="(hour, index) in timeLabels" :key="hour" class="time-label" :class="{ 'last-label': index === timeLabels.length - 1 }">
-            {{ formatTime(hour) }}
-          </div>
-        </div>
-
-        <!-- 每日网格 -->
-        <div v-for="day in weekDays" :key="day.getTime()" class="day-column">
-          <div
-            v-for="slot in timeSlots"
-            :key="`${slot.hour}-${slot.half}`"
-            class="time-slot"
-            :class="{ 'half-hour': slot.half === 1 }"
-            @mousedown="startDrag($event, day, slot)"
-            @mousemove="onDrag($event)"
-            @mouseup="endDrag($event, day, slot)"
-            @mouseleave="isDragging = false"
-          ></div>
-          <!-- 渲染事件（使用绝对定位） -->
-          <el-tooltip
-            v-for="event in getDayEventsForRender(day)"
-            :key="event.id"
-            :content="getEventDetailHtml(event)"
-            raw-content
-            placement="top"
-            :show-after="200"
-          >
-            <div
-              class="event-item-absolute"
-              :style="{ ...event.style, background: getEventType(event.type).bgColor }"
-              @mousedown.stop="openEventDialog(event)"
-            >
-              <span class="event-time">{{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}</span>
-              <span class="event-title">{{ event.title }}</span>
-              <span class="event-type-tag">{{ getEventType(event.type).label }}</span>
+        <!-- 日历网格区域 -->
+        <div class="calendar-grid-wrapper">
+          <div class="calendar-body" ref="calendarBodyRef" @scroll="onCalendarScroll">
+          <!-- 时间轴 -->
+          <div class="time-column">
+            <div v-for="(hour, index) in timeLabels" :key="hour" class="time-label" :class="{ 'last-label': index === timeLabels.length - 1 }">
+              {{ formatTime(hour) }}
             </div>
-          </el-tooltip>
+          </div>
+
+          <!-- 每日网格 -->
+          <div v-for="day in weekDays" :key="day.getTime()" class="day-column">
+            <div
+              v-for="slot in timeSlots"
+              :key="`${slot.hour}-${slot.half}`"
+              class="time-slot"
+              :class="{ 'half-hour': slot.half === 1 }"
+              @mousedown="startDrag($event, day, slot)"
+              @mousemove="onDrag($event)"
+              @mouseup="endDrag($event, day, slot)"
+              @mouseleave="isDragging = false"
+            ></div>
+            <!-- 渲染事件（使用绝对定位） -->
+            <el-tooltip
+              v-for="event in getDayEventsForRender(day)"
+              :key="event.id"
+              :content="getEventDetailHtml(event)"
+              raw-content
+              placement="top"
+              :show-after="200"
+            >
+              <div
+                class="event-item-absolute"
+                :style="{ ...event.style, background: getEventType(event.type).bgColor }"
+                @mousedown.stop="openEventDialog(event)"
+              >
+                <span class="event-time">{{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}</span>
+                <span class="event-title">{{ event.title }}</span>
+                <span class="event-type-tag">{{ getEventType(event.type).label }}</span>
+              </div>
+            </el-tooltip>
+          </div>
+          </div>
         </div>
 
         <!-- 本周事件列表 -->
@@ -657,7 +661,6 @@ watch(reminderEnabled, (enabled) => {
               </el-tooltip>
             </div>
           </div>
-        </div>
         </div>
       </div>
     </div>
@@ -781,8 +784,6 @@ watch(reminderEnabled, (enabled) => {
   box-sizing: border-box;
   width: 100%;
   flex-shrink: 0;
-  /* 预留滚动条宽度 */
-  padding-right: 17px;
 }
 
 .calendar-scroll-container {
@@ -806,17 +807,6 @@ watch(reminderEnabled, (enabled) => {
 
 .day-header:last-child {
   border-right: none;
-}
-
-.event-list-header {
-  padding: 15px;
-  text-align: center;
-  font-size: 14px;
-  font-weight: 600;
-  color: #333;
-  border-left: 1px solid #e0e0e0;
-  background: #fafafa;
-  box-sizing: border-box;
 }
 
 .day-name {
@@ -863,36 +853,62 @@ watch(reminderEnabled, (enabled) => {
   flex: 1;
   overflow: hidden;
   display: flex;
+  flex-direction: row;
+}
+
+.calendar-grid-wrapper {
+  flex: 1;
+  display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.event-list {
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #e0e0e0;
+  flex-shrink: 0;
+  background: #fafafa;
+  box-sizing: border-box;
 }
 
 .calendar-body {
   flex: 1;
   display: grid;
-  grid-template-columns: 60px repeat(7, 1fr) 300px;
+  grid-template-columns: 60px repeat(7, 1fr);
   overflow-y: scroll;
   overflow-x: hidden;
   position: relative;
   box-sizing: border-box;
   width: 100%;
   height: 100%;
+  padding-right: 17px;
 }
 
 /* 强制显示滚动条，确保宽度固定 */
-.calendar-body::-webkit-scrollbar {
+.calendar-body::-webkit-scrollbar,
+.event-list::-webkit-scrollbar,
+.event-list-content::-webkit-scrollbar {
   width: 17px;
 }
 
-.calendar-body::-webkit-scrollbar-track {
+.calendar-body::-webkit-scrollbar-track,
+.event-list::-webkit-scrollbar-track,
+.event-list-content::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.calendar-body::-webkit-scrollbar-thumb {
+.calendar-body::-webkit-scrollbar-thumb,
+.event-list::-webkit-scrollbar-thumb,
+.event-list-content::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.2);
   border-radius: 3px;
 }
 
-.calendar-body::-webkit-scrollbar-thumb:hover {
+.calendar-body::-webkit-scrollbar-thumb:hover,
+.event-list::-webkit-scrollbar-thumb:hover,
+.event-list-content::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.3);
 }
 
@@ -902,11 +918,15 @@ watch(reminderEnabled, (enabled) => {
   flex-direction: column;
 }
 
-.event-list {
-  border-left: 1px solid #e0e0e0;
-  display: flex;
-  flex-direction: column;
+.event-list-header {
+  padding: 15px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
   background: #fafafa;
+  border-bottom: 1px solid #e0e0e0;
+  border-left: 1px solid #e0e0e0;
   box-sizing: border-box;
 }
 
@@ -1180,6 +1200,10 @@ watch(reminderEnabled, (enabled) => {
   }
 
   .time-column {
+    border-color: #3a3a3a;
+  }
+
+  .calendar-grid-wrapper {
     border-color: #3a3a3a;
   }
 
