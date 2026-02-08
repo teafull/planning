@@ -611,7 +611,7 @@ const checkReminders = () => {
 
   // 检查当前时间段前5分钟内的事件
   events.value.forEach(event => {
-    if (event.date === todayStr) {
+    if (event.date === todayStr && !event.isAllDay) {
       const reminderTime = event.startTime - 5/60 // 提前5分钟提醒
       const eventKey = `${event.id}-${todayStr}`
 
