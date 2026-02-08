@@ -15,7 +15,9 @@
         "title": "日程管理",
         "width": 1400,
         "height": 900,
-        "center": true
+        "center": true,
+        "minWidth": 1300,
+        "minHeight": 900
       }
     ],
     "security": {
