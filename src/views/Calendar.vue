@@ -748,7 +748,7 @@ const allDayEventsRowCount = computed(() => {
       </div>
 
       <!-- 全天事件区域 -->
-      <div class="all-day-events-section" :style="{ height: `${allDayEventsRowCount * 28}px` }">
+      <div class="all-day-events-section" :style="{ height: `${allDayEventsRowCount * 26}px` }">
         <div class="all-day-time-header">
           <div class="all-day-label">全天</div>
         </div>
@@ -1575,8 +1575,8 @@ const allDayEventsRowCount = computed(() => {
 }
 
 .all-day-events-row {
-  height: 28px;
-  border-bottom: 1px solid #f0f0f0;
+  height: 26px;
+  border-bottom: 0px solid #f0f0f0;
   position: relative;
 }
 
@@ -1612,8 +1612,8 @@ const allDayEventsRowCount = computed(() => {
 
 .all-day-event-bar {
   position: absolute;
-  top: 4px;
-  height: 20px;
+  top: 1px;
+  height: 24px;
   padding: 0 8px;
   border-radius: 4px;
   color: white;
