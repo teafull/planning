@@ -526,7 +526,20 @@ const remainingWeeks = computed(() => {
 // 获取本周所有事件
 const weekEvents = computed(() => {
   const weekDateStrings = weekDays.value.map(day => day.toISOString().split('T')[0])
-  return events.value.filter(event => weekDateStrings.includes(event.date)).sort((a, b) => {
+  return events.value.filter(event => {
+    // 检查事件是否在本周范围内
+    if (event.isAllDay) {
+      // 全天事件：检查事件日期范围是否与本周有交集
+      const eventStart = new Date(event.date)
+      const eventEnd = new Date(event.endDate || event.date)
+      const weekStart = new Date(weekDateStrings[0])
+      const weekEnd = new Date(weekDateStrings[6])
+      return eventEnd >= weekStart && eventStart <= weekEnd
+    } else {
+      // 非全天事件：检查日期是否在本周
+      return weekDateStrings.includes(event.date)
+    }
+  }).sort((a, b) => {
     // 按日期和时间排序
     const dateCompare = a.date.localeCompare(b.date)
     if (dateCompare !== 0) return dateCompare
