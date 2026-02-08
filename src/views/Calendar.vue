@@ -1127,32 +1127,64 @@ const allDayEventsRowCount = computed(() => {
   box-sizing: border-box;
   width: 100%;
   height: 100%;
-  padding-right: 17px;
+  scrollbar-gutter: stable;
 }
 
-/* 强制显示滚动条，确保宽度固定 */
+/* 滚动条样式 - 仅在滚动时显示，覆盖式不挤压内容 */
 .calendar-body::-webkit-scrollbar,
 .event-list::-webkit-scrollbar,
 .event-list-content::-webkit-scrollbar {
-  width: 17px;
+  width: 8px;
 }
 
-.calendar-body::-webkit-scrollbar-track,
-.event-list::-webkit-scrollbar-track,
-.event-list-content::-webkit-scrollbar-track {
+.calendar-body:-webkit-scrollbar-track,
+.event-list:-webkit-scrollbar-track,
+.event-list-content:-webkit-scrollbar-track {
   background: transparent;
 }
 
 .calendar-body::-webkit-scrollbar-thumb,
 .event-list::-webkit-scrollbar-thumb,
 .event-list-content::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
+  background: transparent;
   border-radius: 3px;
+}
+
+.calendar-body:hover::-webkit-scrollbar-thumb,
+.event-list:hover::-webkit-scrollbar-thumb,
+.event-list-content:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .calendar-body::-webkit-scrollbar-thumb:hover,
 .event-list::-webkit-scrollbar-thumb:hover,
 .event-list-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Firefox 滚动条样式 */
+.calendar-body scrollbar,
+.event-list scrollbar,
+.event-list-content scrollbar {
+  width: thin;
+}
+
+.calendar-body scrollbar-thumb,
+.event-list scrollbar-thumb,
+.event-list-content scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.calendar-body:hover scrollbar-thumb,
+.event-list:hover scrollbar-thumb,
+.event-list-content:hover scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.calendar-body scrollbar-thumb:hover,
+.event-list scrollbar-thumb:hover,
+.event-list-content scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.3);
 }
 
