@@ -212,14 +212,18 @@ const typeDistribution = computed(() => {
 })
 
 const recentItems = computed(() => {
-  return [...eventsInRange.value]
+  const recentEnd = startOfDay(new Date())
+  const recentStart = new Date(recentEnd)
+  recentStart.setDate(recentEnd.getDate() - 2)
+
+  return [...events.value]
+    .filter(event => isInRange(event, recentStart, recentEnd))
     .sort((a, b) => {
       const aDate = parseDate(a.date) || new Date(0)
       const bDate = parseDate(b.date) || new Date(0)
       if (bDate.getTime() !== aDate.getTime()) return bDate - aDate
       return (b.startTime || 0) - (a.startTime || 0)
     })
-    .slice(0, 8)
     .map(event => ({
       title: event.title || '未命名事件',
       type: getTypeLabel(event.type),
@@ -228,6 +232,7 @@ const recentItems = computed(() => {
       duration: formatDuration(event)
     }))
 })
+
 
 const countStats = (rangeStart, rangeEnd) => {
   const filtered = events.value.filter(event => isInRange(event, rangeStart, rangeEnd))
