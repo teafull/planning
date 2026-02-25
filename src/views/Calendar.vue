@@ -999,12 +999,15 @@ const allDayEventsRowCount = computed(() => {
 }
 
 .calendar-app {
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   background: #f5f5f5;
+  overflow: hidden;
 }
+
 
 .calendar-header {
   display: flex;
@@ -1067,7 +1070,9 @@ const allDayEventsRowCount = computed(() => {
   border-radius: 0;
   box-shadow: none;
   box-sizing: border-box;
+  min-width: 0;
 }
+
 
 .week-header {
   display: grid;
@@ -1085,7 +1090,9 @@ const allDayEventsRowCount = computed(() => {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
+
 
 .time-header {
   border-right: 1px solid #e0e0e0;
@@ -1153,14 +1160,18 @@ const allDayEventsRowCount = computed(() => {
   overflow: hidden;
   display: flex;
   flex-direction: row;
+  min-width: 0;
 }
+
 
 .calendar-grid-wrapper {
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
 }
+
 
 .event-list {
   width: 300px;
@@ -1170,7 +1181,9 @@ const allDayEventsRowCount = computed(() => {
   flex-shrink: 0;
   background: #fafafa;
   box-sizing: border-box;
+  min-width: 0;
 }
+
 
 .calendar-body {
   flex: 1;
@@ -1183,7 +1196,9 @@ const allDayEventsRowCount = computed(() => {
   width: 100%;
   height: 100%;
   scrollbar-gutter: stable;
+  min-width: 0;
 }
+
 
 /* 滚动条样式 - 仅在滚动时显示，覆盖式不挤压内容 */
 .calendar-body::-webkit-scrollbar,
