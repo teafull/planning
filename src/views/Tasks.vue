@@ -450,7 +450,39 @@ onUnmounted(() => {
   height: 100%;
   overflow-y: auto;
   box-sizing: border-box;
+  scrollbar-gutter: stable;
 }
+
+.tools-page::-webkit-scrollbar {
+  width: 8px;
+}
+
+.tools-page::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tools-page::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.tools-page:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.tools-page::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.tools-page {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.tools-page:hover {
+  scrollbar-color: rgba(0, 0, 0, 0.35) transparent;
+}
+
 
 .tools-header {
   display: flex;
