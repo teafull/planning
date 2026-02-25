@@ -1,6 +1,8 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import { events, loadEvents } from '../store/events'
+
 
 const range = ref('近7天')
 const dateRange = ref([])
@@ -340,6 +342,23 @@ const generateWeeklyReport = () => {
   reportText.value = weeklyReport.value
 }
 
+const copyWeeklyReport = async () => {
+  const text = reportText.value || weeklyReport.value
+  if (!text) {
+    ElMessage.warning('暂无可复制内容')
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+    reportText.value = text
+    ElMessage.success('已复制周报')
+  } catch (error) {
+    reportText.value = text
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+
 </script>
 
 
@@ -373,7 +392,6 @@ const generateWeeklyReport = () => {
           <el-option label="本年" value="本年" />
         </el-select>
         <el-button type="primary">导出报表</el-button>
-        <el-button type="primary">生成周报</el-button>
       </div>
 
     </header>
@@ -448,8 +466,12 @@ const generateWeeklyReport = () => {
         <template #header>
           <div class="panel-title weekly-report__header">
             <span>生成周报</span>
-            <el-button size="small" type="primary" @click="generateWeeklyReport">生成周报</el-button>
+            <div class="weekly-report__actions">
+              <el-button size="small" @click="copyWeeklyReport">一键复制</el-button>
+              <el-button size="small" type="primary" @click="generateWeeklyReport">生成周报</el-button>
+            </div>
           </div>
+
         </template>
         <el-input
           v-model="reportText"
@@ -661,9 +683,16 @@ const generateWeeklyReport = () => {
   gap: 12px;
 }
 
+.weekly-report__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .weekly-report__textarea {
   width: 100%;
 }
+
 
 .stats-table {
   width: 100%;
