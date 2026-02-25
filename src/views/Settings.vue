@@ -167,7 +167,8 @@ const resetSettings = () => {
             <el-switch v-model="privacy.shareFocusTime" />
           </div>
         </div>
-        <el-divider />
+        <el-divider class="settings-divider" />
+
         <el-form label-width="100px" class="settings-form">
           <el-form-item label="自动备份">
             <el-switch v-model="storage.autoBackup" />
@@ -214,7 +215,39 @@ const resetSettings = () => {
   height: 100%;
   overflow-y: auto;
   box-sizing: border-box;
+  scrollbar-gutter: stable;
 }
+
+.settings-page::-webkit-scrollbar {
+  width: 8px;
+}
+
+.settings-page::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-page::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.settings-page:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.settings-page::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.settings-page {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.settings-page:hover {
+  scrollbar-color: rgba(0, 0, 0, 0.35) transparent;
+}
+
 
 .settings-header {
   display: flex;
@@ -268,7 +301,12 @@ const resetSettings = () => {
   margin-bottom: 14px;
 }
 
+.settings-divider {
+  margin: 2px 0;
+}
+
 .switch-list {
+
   display: flex;
   flex-direction: column;
   gap: 14px;

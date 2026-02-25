@@ -336,7 +336,7 @@ onUnmounted(() => {
         </el-card>
       </div>
     </section>
-    <el-divider />
+    <el-divider class="settings-divider" />
     <section class="tools-grid">
       <el-card class="tools-card" shadow="never">
         <template #header>
@@ -575,6 +575,10 @@ onUnmounted(() => {
   font-size: 15px;
   font-weight: 600;
   color: #111827;
+}
+
+.settings-divider {
+  margin: 0px 0;
 }
 
 .timer {
