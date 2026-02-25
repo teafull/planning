@@ -1,9 +1,10 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { events, loadEvents } from '../store/events'
 
 const range = ref('近7天')
 const dateRange = ref([])
-const events = ref([])
+
 
 
 const typeConfig = [
@@ -14,18 +15,10 @@ const typeConfig = [
   { value: 'other', label: '其他', color: '#94a3b8' }
 ]
 
-const loadEvents = () => {
-  try {
-    const raw = localStorage.getItem('calendar-events')
-    events.value = raw ? JSON.parse(raw) : []
-  } catch (error) {
-    events.value = []
-  }
-}
-
 onMounted(() => {
   loadEvents()
 })
+
 
 const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate())
 

@@ -3,6 +3,8 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElDialog, ElForm, ElFormItem, ElInput, ElDatePicker, ElButton, ElSelect, ElOption, ElTooltip, ElNotification, ElSwitch } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { sendNotification, requestPermission, isPermissionGranted } from '@tauri-apps/plugin-notification'
+import { events, loadEvents } from '../store/events'
+
 
 // 事件类型配置
 const eventTypes = [
@@ -21,8 +23,7 @@ const getEventType = (type) => {
 // 当前周的开始日期
 const currentWeekStart = ref(new Date())
 
-// 事件数据
-const events = ref([])
+
 
 // 提醒开关
 const reminderEnabled = ref(true)
@@ -562,10 +563,7 @@ const weekStatistics = computed(() => {
 })
 
 onMounted(() => {
-  const savedEvents = localStorage.getItem('calendar-events')
-  if (savedEvents) {
-    events.value = JSON.parse(savedEvents)
-  }
+  loadEvents()
 
   // 启动提醒检查
   startReminderCheck()
@@ -576,10 +574,6 @@ onMounted(() => {
   })
 })
 
-// 监听 events 变化并保存到本地存储
-watch(events, (newEvents) => {
-  localStorage.setItem('calendar-events', JSON.stringify(newEvents))
-}, { deep: true })
 
 // 监听开始时间变化，自动调整结束时间
 watch(() => form.value.startTime, (newStartTime) => {
