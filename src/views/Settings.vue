@@ -12,7 +12,8 @@ const preferences = ref({
   theme: 'system',
   density: 'default',
   language: 'zh-CN',
-  weekStart: 'monday'
+  weekStart: 'monday',
+  holidayApiUrl: 'https://timor.tech/api/holiday/year/{year}?country=CN&type=YEAR'
 })
 
 const notifications = ref({
@@ -38,7 +39,7 @@ const saveSettings = () => {
 
 const resetSettings = () => {
   profile.value = { name: '林溪', title: '项目经理', email: 'linxi@example.com' }
-  preferences.value = { theme: 'system', density: 'default', language: 'zh-CN', weekStart: 'monday' }
+  preferences.value = { theme: 'system', density: 'default', language: 'zh-CN', weekStart: 'monday', holidayApiUrl: 'https://timor.tech/api/v1/holiday/year/{year}?country=CN' }
   notifications.value = { desktop: true, email: true, weeklyReport: true, dailyDigest: false }
   privacy.value = { showInStats: true, shareFocusTime: false }
   storage.value = { autoBackup: true, backupFrequency: 'weekly' }
@@ -107,6 +108,9 @@ const resetSettings = () => {
               <el-option label="周一" value="monday" />
               <el-option label="周日" value="sunday" />
             </el-select>
+          </el-form-item>
+          <el-form-item label="节假日API">
+            <el-input v-model="preferences.holidayApiUrl" placeholder="国内节假日API地址" />
           </el-form-item>
         </el-form>
       </el-card>
