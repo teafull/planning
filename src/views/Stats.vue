@@ -24,10 +24,17 @@ const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.
 
 const parseDate = (value) => {
   if (!value) return null
+  if (value instanceof Date) return startOfDay(value)
+  if (typeof value !== 'string') return null
   const [year, month, day] = value.split('-').map(Number)
-  if (!year || !month || !day) return null
-  return new Date(year, month - 1, day)
+  if (year && month && day) {
+    return new Date(year, month - 1, day)
+  }
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  return startOfDay(parsed)
 }
+
 
 const getEventRange = (event) => {
   const start = parseDate(event.date)
@@ -138,12 +145,8 @@ const eventsInRange = computed(() => {
   return events.value.filter(event => isInRange(event, start, end))
 })
 
-const getTypeLabel = (value) => {
-  const match = typeConfig.find(item => item.value === value)
-  return match ? match.label : '其他'
-}
-
 const getStatus = (event) => {
+
   const today = startOfDay(new Date())
   const todayEnd = new Date(today)
   todayEnd.setDate(todayEnd.getDate() + 1)
@@ -155,25 +158,8 @@ const getStatus = (event) => {
   return '进行中'
 }
 
-const formatDuration = (event) => {
-  if (event.isAllDay) {
-    if (event.endDate && event.endDate !== event.date) {
-      const start = parseDate(event.date)
-      const end = parseDate(event.endDate)
-      if (start && end) {
-        const days = Math.floor((end - start) / 86400000) + 1
-        return `${days}天`
-      }
-    }
-    return '全天'
-  }
-  const duration = Math.max(0, Number(event.endTime || 0) - Number(event.startTime || 0))
-  if (duration < 1) return `${Math.round(duration * 60)}m`
-  const fixed = duration % 1 === 0 ? duration.toFixed(0) : duration.toFixed(1)
-  return `${fixed}h`
-}
-
 const focusHours = computed(() => {
+
   const labels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
   const data = labels.map(label => ({ day: label, hours: 0 }))
 
@@ -211,27 +197,8 @@ const typeDistribution = computed(() => {
   })
 })
 
-const recentItems = computed(() => {
-  const recentEnd = startOfDay(new Date())
-  const recentStart = new Date(recentEnd)
-  recentStart.setDate(recentEnd.getDate() - 2)
 
-  return [...events.value]
-    .filter(event => isInRange(event, recentStart, recentEnd))
-    .sort((a, b) => {
-      const aDate = parseDate(a.date) || new Date(0)
-      const bDate = parseDate(b.date) || new Date(0)
-      if (bDate.getTime() !== aDate.getTime()) return bDate - aDate
-      return (b.startTime || 0) - (a.startTime || 0)
-    })
-    .map(event => ({
-      title: event.title || '未命名事件',
-      type: getTypeLabel(event.type),
-      status: getStatus(event),
-      date: event.date || '--',
-      duration: formatDuration(event)
-    }))
-})
+
 
 
 const countStats = (rangeStart, rangeEnd) => {
@@ -398,28 +365,7 @@ const efficiencyTip = computed(() => {
         </div>
       </el-card>
 
-      <el-card class="panel panel--wide" shadow="never">
-        <template #header>
-          <div class="panel-title">最近事件</div>
-        </template>
-        <el-table :data="recentItems" class="stats-table" stripe>
-          <el-table-column prop="title" label="事件" min-width="180" />
-          <el-table-column prop="type" label="类型" width="90" />
-          <el-table-column prop="status" label="状态" width="90">
-            <template #default="scope">
-              <el-tag
-                :type="scope.row.status === '已完成' ? 'success' : scope.row.status === '逾期' ? 'danger' : scope.row.status === '待开始' ? 'info' : 'warning'"
-                size="small"
-              >
-                {{ scope.row.status }}
-              </el-tag>
-            </template>
-          </el-table-column>
 
-          <el-table-column prop="date" label="日期" width="110" />
-          <el-table-column prop="duration" label="耗时" width="90" />
-        </el-table>
-      </el-card>
     </section>
   </div>
 </template>

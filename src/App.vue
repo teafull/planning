@@ -28,9 +28,10 @@ const route = useRoute()
 <style scoped>
 .app-layout {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
   background: #f7f7f8;
 }
+
 
 .side-menu {
   width: 70px;
@@ -63,8 +64,11 @@ const route = useRoute()
 
 .app-content {
   flex: 1;
+  height: 100vh;
+  overflow: hidden;
   box-sizing: border-box;
 }
+
 </style>
 
 
