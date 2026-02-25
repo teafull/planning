@@ -35,8 +35,45 @@ const parseDate = (value) => {
   return startOfDay(parsed)
 }
 
+const formatYmd = (date) => {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+const formatTime = (value) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '--'
+  const hours = Math.floor(value)
+  const minutes = Math.round((value - hours) * 60)
+  const hText = String(hours).padStart(2, '0')
+  const mText = String(minutes).padStart(2, '0')
+  return `${hText}:${mText}`
+}
+
+const weekRange = computed(() => {
+  const today = startOfDay(new Date())
+  const day = today.getDay()
+  const diff = day === 0 ? -6 : 1 - day
+  const start = new Date(today)
+  start.setDate(today.getDate() + diff)
+  const end = new Date(start)
+  end.setDate(start.getDate() + 6)
+  return { start, end }
+})
+
+const isEventOnDay = (event, day) => {
+  const dayStr = formatYmd(day)
+  if (!event.isAllDay) {
+    return event.date === dayStr
+  }
+  const { start, end } = getEventRange(event)
+  if (!start || !end) return false
+  return start <= day && end >= day
+}
 
 const getEventRange = (event) => {
+
   const start = parseDate(event.date)
   const end = parseDate(event.endDate || event.date)
   return { start, end }
@@ -262,6 +299,47 @@ const efficiencyTip = computed(() => {
   if (!maxDay) return '建议：将高优先级任务安排在上午 9:00-11:00。'
   return `建议：你的高效日为${maxDay.day}，将重要任务放在该日高峰时段更容易完成。`
 })
+
+const reportText = ref('')
+
+const weeklyReport = computed(() => {
+  const { start, end } = weekRange.value
+  const weekDays = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(start)
+    date.setDate(start.getDate() + index)
+    return date
+  })
+  const weekLabel = `本周周报（${formatYmd(start)} 至 ${formatYmd(end)}）`
+
+  const lines = weekDays.map((day) => {
+    const dayLabel = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][(day.getDay() + 6) % 7]
+    const dayHeader = `${dayLabel}（${formatYmd(day)}）`
+    const dayEvents = events.value
+      .filter(event => isEventOnDay(event, day))
+      .sort((a, b) => {
+        if ((a.startTime || 0) !== (b.startTime || 0)) return (a.startTime || 0) - (b.startTime || 0)
+        return (a.title || '').localeCompare(b.title || '')
+      })
+
+    if (dayEvents.length === 0) {
+      return `${dayHeader}\n- 无事件`
+    }
+
+    const details = dayEvents.map(event => {
+      const timeLabel = event.isAllDay ? '全天' : `${formatTime(event.startTime)}-${formatTime(event.endTime)}`
+      return `- ${timeLabel} ${event.title || '未命名事件'}`
+    })
+
+    return `${dayHeader}\n${details.join('\n')}`
+  })
+
+  return [weekLabel, ...lines].join('\n')
+})
+
+const generateWeeklyReport = () => {
+  reportText.value = weeklyReport.value
+}
+
 </script>
 
 
@@ -366,8 +444,24 @@ const efficiencyTip = computed(() => {
         </div>
       </el-card>
 
+      <el-card class="panel panel--wide" shadow="never">
+        <template #header>
+          <div class="panel-title weekly-report__header">
+            <span>生成周报</span>
+            <el-button size="small" type="primary" @click="generateWeeklyReport">生成周报</el-button>
+          </div>
+        </template>
+        <el-input
+          v-model="reportText"
+          type="textarea"
+          :rows="10"
+          class="weekly-report__textarea"
+          placeholder="点击“生成周报”后展示本周事件"
+        />
+      </el-card>
 
     </section>
+
   </div>
 </template>
 
@@ -560,9 +654,21 @@ const efficiencyTip = computed(() => {
   font-size: 12px;
 }
 
+.weekly-report__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.weekly-report__textarea {
+  width: 100%;
+}
+
 .stats-table {
   width: 100%;
 }
+
 
 /* 滚动条样式 - 仅在滚动时显示，覆盖式不挤压内容 */
 .stats-page::-webkit-scrollbar {
