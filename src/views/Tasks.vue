@@ -17,7 +17,7 @@ const getEventType = (type) => {
 
 const presets = [
 
-  { label: '番茄 25/5', focus: 25, rest: 5 },
+  { label: '番茄 25/5', focus: 25, rest: 5, longRest: 15 },
   { label: '深度 50/10', focus: 50, rest: 10 },
   { label: '冲刺 90/15', focus: 90, rest: 15 }
 ]
@@ -26,6 +26,8 @@ const selectedPreset = ref(presets[0])
 const mode = ref('focus')
 const remainingSec = ref(selectedPreset.value.focus * 60)
 const running = ref(false)
+const pomodoroTask = ref('')
+const pomodoroRound = ref(1)
 let timerId = null
 
 const formatClock = (value) => {
@@ -48,9 +50,17 @@ const tick = () => {
     remainingSec.value -= 1
     return
   }
-  mode.value = mode.value === 'focus' ? 'rest' : 'focus'
-  remainingSec.value = (mode.value === 'focus' ? selectedPreset.value.focus : selectedPreset.value.rest) * 60
-  ElMessage.success(mode.value === 'focus' ? '进入专注时间' : '进入休息时间')
+  if (mode.value === 'focus') {
+    const isLongRest = selectedPreset.value.longRest && pomodoroRound.value % 4 === 0
+    if (!isLongRest) pomodoroRound.value += 1
+    mode.value = 'rest'
+    remainingSec.value = (isLongRest ? selectedPreset.value.longRest : selectedPreset.value.rest) * 60
+    ElMessage.success(isLongRest ? '专注完成！长休息 15–30 分钟' : '专注完成！休息 5 分钟')
+  } else {
+    mode.value = 'focus'
+    remainingSec.value = selectedPreset.value.focus * 60
+    ElMessage.success('休息结束，继续专注')
+  }
 }
 
 const startTimer = () => {
@@ -71,6 +81,7 @@ const resetTimer = () => {
   pauseTimer()
   mode.value = 'focus'
   remainingSec.value = selectedPreset.value.focus * 60
+  pomodoroRound.value = 1
 }
 
 const toggleTimer = () => {
@@ -401,12 +412,15 @@ onUnmounted(() => {
         <div class="timer timer--tomato">
           <div class="timer__status">
             <span>{{ currentLabel }}</span>
+            <el-tag v-if="selectedPreset.label === '番茄 25/5'" type="danger" effect="light">第 {{ pomodoroRound }} 轮</el-tag>
             <strong>{{ formatClock(remainingSec) }}</strong>
           </div>
           <el-progress :percentage="progress" :stroke-width="10" color="#ef4444" />
 
           <div class="timer__controls">
-            <el-button @click="toggleTimer">{{ running ? '暂停' : '开始' }}</el-button>
+            <el-button @click="toggleTimer">
+              {{ running ? '暂停' : '开始' }}
+            </el-button>
             <el-button @click="resetTimer">重置</el-button>
           </div>
           <div class="timer__presets">
@@ -795,6 +809,10 @@ onUnmounted(() => {
 .timer__status strong {
   font-size: 28px;
   color: #111827;
+}
+
+.timer__task {
+  margin-top: 8px;
 }
 
 .timer__controls {
