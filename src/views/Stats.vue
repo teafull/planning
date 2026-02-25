@@ -471,8 +471,8 @@ const copyWeeklyReport = async () => {
           </div>
         </div>
       </el-card>
-      
-      <el-card class="panel panel--wide" shadow="never">
+
+      <el-card class="panel" shadow="never">
         <template #header>
           <div class="panel-title weekly-report__header">
             <span>生成周报</span>
