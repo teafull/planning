@@ -2,7 +2,9 @@
 import { ref, computed, onMounted } from 'vue'
 
 const range = ref('近7天')
+const dateRange = ref([])
 const events = ref([])
+
 
 const typeConfig = [
   { value: 'task', label: '任务', color: '#6366f1' },
@@ -42,9 +44,20 @@ const getEventRange = (event) => {
 
 const rangeInfo = computed(() => {
   const today = startOfDay(new Date())
+  if (Array.isArray(dateRange.value) && dateRange.value.length === 2 && dateRange.value[0] && dateRange.value[1]) {
+    const first = parseDate(dateRange.value[0])
+    const second = parseDate(dateRange.value[1])
+    if (first && second) {
+      const start = first <= second ? first : second
+      const end = first <= second ? second : first
+      const days = Math.floor((end - start) / 86400000) + 1
+      return { start, end, days }
+    }
+  }
   if (range.value === '今天') {
     return { start: today, end: today, days: 1 }
   }
+
   if (range.value === '本月') {
     const start = new Date(today.getFullYear(), today.getMonth(), 1)
     const end = new Date(today.getFullYear(), today.getMonth() + 1, 0)
@@ -79,11 +92,19 @@ const rangeInfo = computed(() => {
 
 const previousRangeInfo = computed(() => {
   const { start, end, days } = rangeInfo.value
+  if (Array.isArray(dateRange.value) && dateRange.value.length === 2 && dateRange.value[0] && dateRange.value[1]) {
+    const prevStart = new Date(start)
+    prevStart.setDate(start.getDate() - days)
+    const prevEnd = new Date(end)
+    prevEnd.setDate(end.getDate() - days)
+    return { start: prevStart, end: prevEnd }
+  }
   if (range.value === '今天') {
     const prevStart = new Date(start)
     prevStart.setDate(start.getDate() - 1)
     return { start: prevStart, end: prevStart }
   }
+
   if (range.value === '本月') {
     const prevStart = new Date(start.getFullYear(), start.getMonth() - 1, 1)
     const prevEnd = new Date(start.getFullYear(), start.getMonth(), 0)
@@ -287,6 +308,18 @@ const efficiencyTip = computed(() => {
         <p class="stats-subtitle">聚合你的一周节奏、完成效率与事件分布。</p>
       </div>
       <div class="stats-actions">
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          size="small"
+          class="stats-date"
+          unlink-panels
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          value-format="YYYY-MM-DD"
+          clearable
+        />
         <el-select v-model="range" size="small" class="stats-select">
           <el-option label="今天" value="今天" />
           <el-option label="近7天" value="近7天" />
@@ -296,10 +329,9 @@ const efficiencyTip = computed(() => {
           <el-option label="本半年" value="本半年" />
           <el-option label="本年" value="本年" />
         </el-select>
-
-
         <el-button size="small" type="primary">导出报表</el-button>
       </div>
+
     </header>
 
     <section class="stats-grid">
@@ -431,11 +463,17 @@ const efficiencyTip = computed(() => {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.stats-date {
+  width: 240px;
 }
 
 .stats-select {
   width: 120px;
 }
+
 
 .stats-grid {
   display: grid;
