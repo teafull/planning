@@ -16,13 +16,51 @@ import {
   resetSettings as storeReset
 } from '../store/settings.js'
 
-const holidayData = ref(""); // 节假日数据
+const holidayData = ref({}) // 节假日数据
+
+// 加载本地节假日数据
+const loadHolidayData = () => {
+  const raw = localStorage.getItem('holiday-data')
+  if (raw) {
+    try {
+      holidayData.value = JSON.parse(raw)
+    } catch {}
+  }
+}
+
+// 保存节假日数据
+const saveHolidayData = () => {
+  localStorage.setItem('holiday-data', JSON.stringify(holidayData.value))
+}
+
+// 判断某天是否为节假日
+const isHoliday = (date) => {
+  if (!holidayData.value || typeof holidayData.value !== 'object') return false
+  const dateKey = formatDateKey(date)
+  const info = holidayData.value[dateKey]
+  return info && info.holiday === true
+}
+
+// 获取节假日名称
+const getHolidayName = (date) => {
+  if (!holidayData.value || typeof holidayData.value !== 'object') return ''
+  const dateKey = formatDateKey(date)
+  return holidayData.value[dateKey]?.name || ''
+}
+
+// 格式化日期键（MM-DD）
+const formatDateKey = (date) => {
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${m}-${d}`
+}
 
 async function getHolidayData() {
   const res = await invoke("http_get", { url: preferences.value.holidayApiUrl });
   console.log('Rust 响应：', res);
   holidayData.value = res.holiday;
   console.log('解析后的 holidayData：', holidayData.value);
+  saveHolidayData();
 }
 
 // 事件类型配置
@@ -582,7 +620,9 @@ const weekStatistics = computed(() => {
 })
 
 onMounted(() => {
+  getHolidayData()
   loadEvents()
+  loadHolidayData()
 
   // 启动提醒检查
   startReminderCheck()
@@ -791,7 +831,6 @@ const allDayEventsRowCount = computed(() => {
           <span class="reminder-label">提醒</span>
           <el-switch v-model="reminderEnabled" />
           <el-button size="small" @click="testReminder" type="primary" plain>测试</el-button>
-          <el-button size="small" @click="getHolidayData" type="primary" plain>节假日</el-button>
         </div>
         <div class="statistics-info">
           <span class="stat-item">总事件: {{ weekStatistics.totalCount }}</span>
@@ -810,7 +849,10 @@ const allDayEventsRowCount = computed(() => {
       <div class="week-header" ref="weekHeaderRef">
         <div class="time-header"></div>
         <div v-for="day in weekDays" :key="day.getTime()" class="day-header" :class="{ 'today': isToday(day), 'weekend': day.getDay() === 0 || day.getDay() === 6 }">
-          <div class="day-name">{{ ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][day.getDay() === 0 ? 6 : day.getDay() - 1] }}</div>
+          <div class="day-name" :class="{ 'is-holiday': isHoliday(day) }">
+            {{ ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][day.getDay() === 0 ? 6 : day.getDay() - 1] }}
+            <span v-if="isHoliday(day)" class="holiday-tag">{{ getHolidayName(day) }}</span>
+          </div>
           <div class="day-date">{{ formatDate(day) }}</div>
           <div v-if="day.getDay() === 0 || day.getDay() === 6" class="rest-tag">休息</div>
         </div>
@@ -1133,6 +1175,23 @@ const allDayEventsRowCount = computed(() => {
 .day-name {
   font-size: 13px;
   color: #666;
+}
+
+.day-name.is-holiday {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.holiday-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 6px;
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #dc2626;
+  font-weight: 600;
 }
 
 .day-date {

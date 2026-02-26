@@ -36,8 +36,6 @@ async fn http_get(url: &str) -> Result<ApiResponse, HttpError> {
     // let utc_year = Utc::now().year();
     let final_url = url.replace("{year}", &format!("{}", local_year));
 
-    println!("Sending GET request to {}", final_url);
-
     // 创建 HTTP 客户端
     let client = reqwest::Client::new();
     
