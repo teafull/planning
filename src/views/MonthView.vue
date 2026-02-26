@@ -22,13 +22,19 @@
           </div>
         </div>
         
-        <div class="calendar-grid">
-          <!-- 空白日期占位符 -->
-          <div 
-            v-for="n in firstDayOfWeek" 
-            :key="`empty-${n}`" 
-            class="calendar-day empty"
-          ></div>
+      <div class="calendar-grid">
+        <!-- 上月末尾日期占位符 -->
+        <div 
+          v-for="(day, index) in previousMonthDays" 
+          :key="`prev-${index}`" 
+          class="calendar-day other-month"
+        >
+          <div class="day-content">
+            <div class="day-number">
+              {{ day }}
+            </div>
+          </div>
+        </div>
           
           <!-- 实际日期 -->
           <div 
@@ -69,10 +75,23 @@
                 <span v-if="day.events.length > 3" class="more-events">
                   +{{ day.events.length - 3 }}
                 </span>
-              </div>
             </div>
           </div>
         </div>
+        
+        <!-- 下月开始日期占位符 -->
+        <div 
+          v-for="(day, index) in nextMonthDays" 
+          :key="`next-${index}`" 
+          class="calendar-day other-month"
+        >
+          <div class="day-content">
+            <div class="day-number">
+              {{ day }}
+            </div>
+          </div>
+        </div>
+      </div>
       </section>
 
       <!-- 右侧事件列表 -->
@@ -391,6 +410,37 @@ const nextMonth = () => {
   currentDate.value = new Date(currentYear.value, currentMonth.value, 1)
 }
 
+// 计算上个月的日期
+const previousMonthDays = computed(() => {
+  const prevMonthLastDay = new Date(currentYear.value, currentMonth.value - 1, 0).getDate()
+  const days = []
+  
+  // firstDayOfWeek 表示需要填充的上月天数
+  for (let i = 0; i < firstDayOfWeek.value; i++) {
+    days.push(prevMonthLastDay - firstDayOfWeek.value + 1 + i)
+  }
+  
+  return days
+})
+
+// 计算下个月的日期
+const nextMonthDays = computed(() => {
+  const year = currentYear.value
+  const month = currentMonth.value
+  const daysInCurrentMonth = new Date(year, month, 0).getDate()
+  const totalCells = firstDayOfWeek.value + daysInCurrentMonth
+  const remainingCells = totalCells % 7 === 0 ? 0 : 7 - (totalCells % 7)
+  const days = []
+  
+  for (let i = 1; i <= remainingCells; i++) {
+    days.push(i)
+  }
+  
+  return days
+})
+
+
+
 const goToToday = () => {
   currentDate.value = new Date()
 }
@@ -502,6 +552,7 @@ const formatEventTime = (time) => {
 watch([currentYear, currentMonth], () => {
   // 可以在这里加载该月的事件数据
   console.log(`加载 ${currentYear.value}年${currentMonth.value}月的事件`)
+  debugMonthCalendar(currentYear.value, currentMonth.value)
 })
 
 // 监听事件变化时清除缓存
@@ -625,10 +676,45 @@ const debugEventDuplicates = () => {
   })
 }
 
+// 调试函数：检查特定月份的日历
+const debugMonthCalendar = (year, month) => {
+  console.log(`=== 调试 ${year}年${month}月 ===`)
+  
+  // 检查月份天数
+  const daysInMonthCount = new Date(year, month, 0).getDate()
+  console.log(`${month}月有 ${daysInMonthCount} 天`)
+  
+  // 检查第一天是星期几
+  const firstDay = new Date(year, month - 1, 1)
+  const dayIndex = firstDay.getDay()
+  const firstDayOfWeekValue = dayIndex === 0 ? 6 : dayIndex - 1
+  console.log(`${month}月1日是星期${dayIndex} (JavaScript), 周一开始模式: ${firstDayOfWeekValue}`)
+  
+  // 检查上个月天数
+  const prevMonthLastDay = new Date(year, month - 1, 0).getDate()
+  console.log(`上个月最后一天: ${prevMonthLastDay}`)
+  
+  // 检查下月需要的天数
+  const totalCells = firstDayOfWeekValue + daysInMonthCount
+  const remainingCells = totalCells % 7 === 0 ? 0 : 7 - (totalCells % 7)
+  console.log(`需要显示的下月天数: ${remainingCells}`)
+  
+  console.log('日历布局:')
+  console.log(`上月占位: ${firstDayOfWeekValue} 天`)
+  console.log(`当月天数: ${daysInMonthCount} 天`)
+  console.log(`下月占位: ${remainingCells} 天`)
+  console.log(`总格子数: ${firstDayOfWeekValue + daysInMonthCount + remainingCells}`)
+  console.log('================================')
+}
+
 // 组件挂载
 onMounted(() => {
   loadHolidayData()
   debugEventDuplicates()
+  
+  // 专门调试2026年3月
+  debugMonthCalendar(2026, 3)
+  
   console.log('月视图组件已挂载')
 })
 </script>
