@@ -8,6 +8,35 @@
         </div>
         <el-button @click="nextMonth" :icon="ArrowRight" circle />
       </div>
+      <div class="month-stats" @click="toggleStatsDetail" :class="{ 'stats-detailed': showStatsDetail }">
+        <div class="stats-item">
+          <span class="stats-label">总事件:</span>
+          <span class="stats-value">{{ monthStats.totalEvents }}</span>
+        </div>
+        <div class="stats-item">
+          <span class="stats-label">全天:</span>
+          <span class="stats-value">{{ monthStats.allDayEvents }}</span>
+        </div>
+        <div class="stats-item">
+          <span class="stats-label">定时:</span>
+          <span class="stats-value">{{ monthStats.regularEvents }}</span>
+        </div>
+        <div class="stats-item" v-if="monthStats.busiestDay">
+          <span class="stats-label">最忙:</span>
+          <span class="stats-value">{{ new Date(monthStats.busiestDay).getDate() }}日({{ monthStats.maxEvents }})</span>
+        </div>
+        <div v-if="showStatsDetail && monthStats.multiDayEvents > 0" class="stats-item">
+          <span class="stats-label">跨天:</span>
+          <span class="stats-value">{{ monthStats.multiDayEvents }}</span>
+        </div>
+        <div v-if="showStatsDetail" class="stats-item">
+          <span class="stats-label">活跃天:</span>
+          <span class="stats-value">{{ monthStats.daysWithEvents }}</span>
+        </div>
+        <div class="stats-expand-hint">
+          <el-icon :size="12"><ArrowDown v-if="!showStatsDetail" /><ArrowUp v-else /></el-icon>
+        </div>
+      </div>
       <div class="month-actions">
         <el-button @click="goToToday" type="primary">今天</el-button>
         <el-button @click="showDatePicker">选择日期</el-button>
@@ -207,7 +236,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ArrowLeft, ArrowRight } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import { events } from '../store/events.js'
 
 // 响应式数据
@@ -217,6 +246,7 @@ const selectedDate = ref(null)
 const showEventDrawer = ref(false)
 const selectedDay = ref(null)
 const holidayData = ref({}) // 节假日数据
+const showStatsDetail = ref(false) // 是否显示详细统计
 
 // 性能优化：添加计算缓存
 const daysInMonthCache = ref(new Map())
@@ -280,6 +310,48 @@ const weekdays = ['一', '二', '三', '四', '五', '六', '日']
 // 计算属性
 const currentYear = computed(() => currentDate.value.getFullYear())
 const currentMonth = computed(() => currentDate.value.getMonth() + 1)
+
+// 月度统计信息
+const monthStats = computed(() => {
+  const monthEvents = currentMonthEvents.value
+  const totalEvents = monthEvents.length
+  const allDayEvents = monthEvents.filter(e => e.isAllDay).length
+  const regularEvents = totalEvents - allDayEvents
+  
+  // 计算跨天事件数量
+  const multiDayEvents = monthEvents.filter(e => e.endDate && e.endDate !== e.date).length
+  
+  // 计算本月有事件的天数
+  const daysWithEvents = new Set(monthEvents.map(e => e.date)).size
+  
+  // 找出本月最忙的一天
+  const eventsByDate = {}
+  monthEvents.forEach(event => {
+    if (!eventsByDate[event.date]) {
+      eventsByDate[event.date] = 0
+    }
+    eventsByDate[event.date]++
+  })
+  
+  let busiestDay = null
+  let maxEvents = 0
+  for (const [date, count] of Object.entries(eventsByDate)) {
+    if (count > maxEvents) {
+      maxEvents = count
+      busiestDay = date
+    }
+  }
+  
+  return {
+    totalEvents,
+    allDayEvents,
+    regularEvents,
+    multiDayEvents,
+    daysWithEvents,
+    busiestDay,
+    maxEvents
+  }
+})
 
 const firstDayOfWeek = computed(() => {
   const firstDay = new Date(currentYear.value, currentMonth.value - 1, 1)
@@ -463,6 +535,10 @@ const handleDateSelect = () => {
     currentDate.value = new Date(selectedDate.value)
     showDateDialog.value = false
   }
+}
+
+const toggleStatsDetail = () => {
+  showStatsDetail.value = !showStatsDetail.value
 }
 
 const selectDate = (day) => {
@@ -756,6 +832,53 @@ onMounted(() => {
   font-size: 20px;
   font-weight: 600;
   color: #1f2937;
+}
+
+.month-stats {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 1px 22px;
+  background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  flex-wrap: wrap;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  position: relative;
+  min-height: 28px;
+}
+
+.month-stats:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.stats-expand-hint {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #64748b;
+  transition: transform 0.3s ease;
+}
+
+.stats-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.stats-label {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.stats-value {
+  color: #1e293b;
+  font-weight: 600;
+  font-size: 13px;
 }
 
 .month-actions {
@@ -1253,6 +1376,14 @@ onMounted(() => {
   
   .month-actions {
     justify-content: center;
+  }
+  
+  .stats-item {
+    font-size: 11px;
+  }
+  
+  .stats-value {
+    font-size: 12px;
   }
   
   .calendar-day {
