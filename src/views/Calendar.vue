@@ -98,8 +98,8 @@ const currentWeekStart = ref(new Date())
 
 
 
-// 提醒开关
-const reminderEnabled = ref(true)
+// 提醒开关 - 使用设置中的桌面通知配置
+const reminderEnabled = computed(() => notifications.value.desktop)
 let reminderInterval = null
 const notifiedEvents = ref(new Set()) // 记录已通知的事件ID
 
@@ -851,7 +851,7 @@ const allDayEventsRowCount = computed(() => {
       <div class="header-controls">
         <div class="reminder-control">
           <span class="reminder-label">提醒</span>
-          <el-switch v-model="reminderEnabled" />
+          <el-switch v-model="notifications.desktop" />
           <el-button size="small" @click="testReminder" type="primary" plain>测试</el-button>
         </div>
         <div class="statistics-info">
