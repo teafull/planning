@@ -13,10 +13,11 @@ const route = useRoute()
         router
       >
         <el-menu-item index="/calendar">日历</el-menu-item>
+        <el-menu-item index="/month">月历</el-menu-item>
         <el-menu-item index="/tasks">任务</el-menu-item>
         <el-menu-item index="/stats">统计</el-menu-item>
-        <!-- <el-menu-item index="/performance">绩效</el-menu-item> -->
-        <!-- <el-menu-item index="/ai-chat">AI</el-menu-item> -->
+        <!-- <el-menu-item index="/performance">绩效</el-menu-item>
+        <el-menu-item index="/ai-chat">AI助手</el-menu-item> -->
         <el-menu-item index="/settings" class="side-menu__bottom-item">设置</el-menu-item>
       </el-menu>
 

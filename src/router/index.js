@@ -5,6 +5,7 @@ import Stats from '../views/Stats.vue'
 import Settings from '../views/Settings.vue'
 import Performance from '../views/Performance.vue'
 import AIChat from '../views/AIChat.vue'
+import MonthView from '../views/MonthView.vue'
 
 const routes = [
   { path: '/', redirect: '/calendar' },
@@ -13,7 +14,8 @@ const routes = [
   { path: '/stats', name: 'stats', component: Stats },
   { path: '/settings', name: 'settings', component: Settings },
   { path: '/performance', name: 'performance', component: Performance },
-  { path: '/ai-chat', name: 'ai-chat', component: AIChat }
+  { path: '/ai-chat', name: 'ai-chat', component: AIChat },
+  { path: '/month', name: 'month', component: MonthView }
 ]
 
 export default createRouter({
