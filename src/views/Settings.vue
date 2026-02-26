@@ -1,48 +1,20 @@
 <script setup>
-import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-
-const profile = ref({
-  name: '林溪',
-  title: '项目经理',
-  email: 'linxi@example.com'
-})
-
-const preferences = ref({
-  theme: 'system',
-  density: 'default',
-  language: 'zh-CN',
-  weekStart: 'monday',
-  holidayApiUrl: 'https://timor.tech/api/holiday/year/{year}?country=CN&type=YEAR'
-})
-
-const notifications = ref({
-  desktop: true,
-  email: true,
-  weeklyReport: true,
-  dailyDigest: false
-})
-
-const privacy = ref({
-  showInStats: true,
-  shareFocusTime: false
-})
-
-const storage = ref({
-  autoBackup: true,
-  backupFrequency: 'weekly'
-})
+import {
+  profile,
+  preferences,
+  notifications,
+  privacy,
+  storage,
+  resetSettings as storeReset
+} from '../store/settings.js'
 
 const saveSettings = () => {
   ElMessage.success('设置已保存')
 }
 
 const resetSettings = () => {
-  profile.value = { name: '林溪', title: '项目经理', email: 'linxi@example.com' }
-  preferences.value = { theme: 'system', density: 'default', language: 'zh-CN', weekStart: 'monday', holidayApiUrl: 'https://timor.tech/api/v1/holiday/year/{year}?country=CN' }
-  notifications.value = { desktop: true, email: true, weeklyReport: true, dailyDigest: false }
-  privacy.value = { showInStats: true, shareFocusTime: false }
-  storage.value = { autoBackup: true, backupFrequency: 'weekly' }
+  storeReset()
   ElMessage.success('已恢复默认设置')
 }
 </script>

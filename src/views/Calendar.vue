@@ -4,7 +4,26 @@ import { ElDialog, ElForm, ElFormItem, ElInput, ElDatePicker, ElButton, ElSelect
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { sendNotification, requestPermission, isPermissionGranted } from '@tauri-apps/plugin-notification'
 import { events, loadEvents } from '../store/events'
+import { invoke } from "@tauri-apps/api/core";
 
+// 日历配置参数
+import {
+  profile,
+  preferences,
+  notifications,
+  privacy,
+  storage,
+  resetSettings as storeReset
+} from '../store/settings.js'
+
+const holidayData = ref(""); // 节假日数据
+
+async function getHolidayData() {
+  console.info("获取节假日数据")
+  console.info(preferences.value)
+  holidayData.value = await invoke("http_get", { url: preferences.holidayApiUrl.value });
+  console.info(holidayData.value)
+}
 
 // 事件类型配置
 const eventTypes = [
@@ -772,6 +791,7 @@ const allDayEventsRowCount = computed(() => {
           <span class="reminder-label">提醒</span>
           <el-switch v-model="reminderEnabled" />
           <el-button size="small" @click="testReminder" type="primary" plain>测试</el-button>
+          <el-button size="small" @click="getHolidayData" type="primary" plain>节假日</el-button>
         </div>
         <div class="statistics-info">
           <span class="stat-item">总事件: {{ weekStatistics.totalCount }}</span>

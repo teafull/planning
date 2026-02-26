@@ -3,6 +3,57 @@ use tauri::{
   tray::{MouseButton, MouseButtonState, TrayIconBuilder},
   Manager,
 };
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+// 自定义错误类型，方便前端处理
+#[derive(Debug, Error, Serialize)]
+enum HttpError {
+    #[error("请求失败: {0}")]
+    RequestError(String),
+    #[error("解析响应失败: {0}")]
+    ParseError(String),
+    #[error("网络错误: {0}")]
+    NetworkError(String),
+}
+
+// 响应数据结构（示例）
+#[derive(Debug, Deserialize, Serialize)]
+struct ApiResponse {
+    code: u32,
+    message: String,
+    data: Option<serde_json::Value>,
+}
+
+// GET 请求示例
+#[tauri::command]
+async fn http_get(url: &str) -> Result<ApiResponse, HttpError> {
+    // 创建 HTTP 客户端
+    let client = reqwest::Client::new();
+    
+    // 发送 GET 请求
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| HttpError::NetworkError(e.to_string()))?;
+
+    // 检查响应状态
+    if !response.status().is_success() {
+        return Err(HttpError::RequestError(format!(
+            "请求失败，状态码: {}",
+            response.status()
+        )));
+    }
+
+    // 解析 JSON 响应
+    let data: ApiResponse = response
+        .json()
+        .await
+        .map_err(|e| HttpError::ParseError(e.to_string()))?;
+
+    Ok(data)
+}
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -73,7 +124,7 @@ pub fn run() {
     })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![greet, http_get])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
