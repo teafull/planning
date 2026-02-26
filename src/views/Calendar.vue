@@ -121,8 +121,10 @@ const onCalendarScroll = () => {
 
 // 每小时半小时时间片数
 const HALF_HOUR_SLOTS = 2
-const START_HOUR = 8
-const END_HOUR = 23
+
+// 使用设置中的时间配置
+const START_HOUR = computed(() => parseInt(preferences.value.dayStartTime?.split(':')[0] || 8))
+const END_HOUR = computed(() => parseInt(preferences.value.dayEndTime?.split(':')[0] || 23))
 
 // 计算当前周的日期（周一到周日）
 const weekDays = computed(() => {
@@ -140,10 +142,12 @@ const weekDays = computed(() => {
   return days
 })
 
-// 生成时间轴（8:00 - 22:00，每半小时一个单位）
+// 生成时间轴（使用设置中的时间范围，每半小时一个单位）
 const timeSlots = computed(() => {
   const slots = []
-  for (let hour = START_HOUR; hour < END_HOUR; hour++) {
+  const startHour = START_HOUR.value
+  const endHour = END_HOUR.value
+  for (let hour = startHour; hour < endHour; hour++) {
     for (let half = 0; half < HALF_HOUR_SLOTS; half++) {
       slots.push({
         hour: hour,
@@ -154,9 +158,9 @@ const timeSlots = computed(() => {
   }
   // 添加最后一小时
   slots.push({
-    hour: END_HOUR,
+    hour: endHour,
     half: 0,
-    value: END_HOUR
+    value: endHour
   })
   return slots
 })
@@ -164,7 +168,9 @@ const timeSlots = computed(() => {
 // 生成时间轴标签（只显示整点）
 const timeLabels = computed(() => {
   const labels = []
-  for (let hour = START_HOUR; hour <= END_HOUR; hour++) {
+  const startHour = START_HOUR.value
+  const endHour = END_HOUR.value
+  for (let hour = startHour; hour <= endHour; hour++) {
     labels.push(hour)
   }
   return labels
@@ -361,8 +367,8 @@ const startDragAllDay = (e, day) => {
     id: Date.now(),
     date: eventDate,
     endDate: eventDate,
-    startTime: START_HOUR,
-    endTime: END_HOUR,
+    startTime: START_HOUR.value,
+    endTime: END_HOUR.value,
     title: '',
     type: 'allDay',
     isAllDay: true

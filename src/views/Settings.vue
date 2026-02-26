@@ -84,6 +84,27 @@ const resetSettings = () => {
           <el-form-item label="节假日API">
             <el-input v-model="preferences.holidayApiUrl" placeholder="国内节假日API地址" />
           </el-form-item>
+          <el-form-item label="天时间范围">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <el-select v-model="preferences.dayStartTime" placeholder="开始" style="width: 100px;">
+                <el-option 
+                  v-for="hour in 24" 
+                  :key="hour - 1" 
+                  :label="String(hour - 1).padStart(2, '0') + ':00'" 
+                  :value="String(hour - 1).padStart(2, '0') + ':00'"
+                />
+              </el-select>
+              <span>至</span>
+              <el-select v-model="preferences.dayEndTime" placeholder="结束" style="width: 100px;">
+                <el-option 
+                  v-for="hour in 24" 
+                  :key="hour - 1" 
+                  :label="String(hour - 1).padStart(2, '0') + ':00'" 
+                  :value="String(hour - 1).padStart(2, '0') + ':00'"
+                />
+              </el-select>
+            </div>
+          </el-form-item>
         </el-form>
       </el-card>
 

@@ -4,16 +4,18 @@ const STORAGE_KEY = 'app-settings'
 
 const DEFAULT_SETTINGS = {
   profile: {
-    name: '林溪',
-    title: '项目经理',
-    email: 'linxi@example.com'
+    name: '',
+    title: '',
+    email: ''
   },
   preferences: {
     theme: 'system',
     density: 'default',
     language: 'zh-CN',
     weekStart: 'monday',
-    holidayApiUrl: 'https://timor.tech/api/holiday/year/{year}?country=CN&type=YEAR'
+    holidayApiUrl: 'https://timor.tech/api/holiday/year/{year}?country=CN&type=YEAR',
+    dayStartTime: '08:00',
+    dayEndTime: '22:00'
   },
   notifications: {
     desktop: true,
