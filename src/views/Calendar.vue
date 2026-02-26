@@ -48,6 +48,22 @@ const getHolidayName = (date) => {
   return holidayData.value[dateKey]?.name || ''
 }
 
+// 判断某天是否为补班日
+const isWorkday = (date) => {
+  if (!holidayData.value || typeof holidayData.value !== 'object') return false
+  const dateKey = formatDateKey(date)
+  const info = holidayData.value[dateKey]
+  return info && info.holiday === false && info.wage === 1
+}
+
+// 获取补班日名称
+const getWorkdayName = (date) => {
+  if (!holidayData.value || typeof holidayData.value !== 'object') return ''
+  const dateKey = formatDateKey(date)
+  const info = holidayData.value[dateKey]
+  return info && info.holiday === false ? info.name : ''
+}
+
 // 格式化日期键（MM-DD）
 const formatDateKey = (date) => {
   const m = String(date.getMonth() + 1).padStart(2, '0')
@@ -849,12 +865,13 @@ const allDayEventsRowCount = computed(() => {
       <div class="week-header" ref="weekHeaderRef">
         <div class="time-header"></div>
         <div v-for="day in weekDays" :key="day.getTime()" class="day-header" :class="{ 'today': isToday(day), 'weekend': day.getDay() === 0 || day.getDay() === 6 }">
-          <div class="day-name" :class="{ 'is-holiday': isHoliday(day) }">
+          <div class="day-name" :class="{ 'is-holiday': isHoliday(day), 'is-workday': isWorkday(day) }">
             {{ ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][day.getDay() === 0 ? 6 : day.getDay() - 1] }}
             <span v-if="isHoliday(day)" class="holiday-tag">{{ getHolidayName(day) }}</span>
+            <span v-else-if="isWorkday(day)" class="workday-tag">{{ getWorkdayName(day) }}</span>
           </div>
           <div class="day-date">{{ formatDate(day) }}</div>
-          <div v-if="day.getDay() === 0 || day.getDay() === 6" class="rest-tag">休息</div>
+          <div v-if="(day.getDay() === 0 || day.getDay() === 6) && !isHoliday(day) && !isWorkday(day)" class="rest-tag">休息</div>
         </div>
         <div class="event-list-header">本周事件</div>
       </div>
@@ -871,7 +888,7 @@ const allDayEventsRowCount = computed(() => {
                 v-for="day in weekDays"
                 :key="day.getTime()"
                 class="all-day-day-cell"
-                :class="{ 'today': isToday(day), 'weekend': day.getDay() === 0 || day.getDay() === 6 }"
+                :class="{ 'today': isToday(day), 'weekend': day.getDay() === 0 || day.getDay() === 6, 'is-workday': isWorkday(day) }"
                 @mousedown.stop="startDragAllDay($event, day)"
               ></div>
               <div
@@ -922,7 +939,7 @@ const allDayEventsRowCount = computed(() => {
               v-for="slot in timeSlots"
               :key="`${slot.hour}-${slot.half}`"
               class="time-slot"
-              :class="{ 'half-hour': slot.half === 1 }"
+              :class="{ 'half-hour': slot.half === 1, 'weekend': day.getDay() === 0 || day.getDay() === 6, 'is-workday': isWorkday(day) }"
               @mousedown="startDrag($event, day, slot)"
               @mousemove="onDrag($event)"
               @mouseup="endDrag($event, day, slot)"
@@ -1191,6 +1208,23 @@ const allDayEventsRowCount = computed(() => {
   border-radius: 999px;
   font-size: 11px;
   color: #dc2626;
+  font-weight: 600;
+}
+
+.day-name.is-workday {
+  color: #10b981;
+  font-weight: 600;
+}
+
+.workday-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 6px;
+  background: #ecfdf5;
+  border: 1px solid #6ee7b7;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #059669;
   font-weight: 600;
 }
 
@@ -1647,6 +1681,15 @@ const allDayEventsRowCount = computed(() => {
     background: #0a3d1f;
   }
 
+  .time-slot.is-workday {
+    background: rgba(16, 185, 129, 0.03);
+    border-color: rgba(16, 185, 129, 0.1);
+  }
+
+  .time-slot.is-workday:hover {
+    background: rgba(16, 185, 129, 0.08);
+  }
+
   .event-list-header {
     border-color: #3a3a3a;
     background: #1f1f1f;
@@ -1809,6 +1852,10 @@ const allDayEventsRowCount = computed(() => {
 
 .all-day-day-cell.weekend {
   background: rgba(245, 101, 101, 0.05);
+}
+
+.all-day-day-cell.is-workday {
+  background: rgba(16, 185, 129, 0.05);
 }
 
 .all-day-event-bar {
