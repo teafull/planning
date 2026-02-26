@@ -1,10 +1,11 @@
 use tauri::{
-  menu::{Menu, MenuItem},
-  tray::{MouseButton, MouseButtonState, TrayIconBuilder},
-  Manager,
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder},
+    Manager,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use chrono::{Local, Datelike};
 
 // 自定义错误类型，方便前端处理
 #[derive(Debug, Error, Serialize)]
@@ -21,19 +22,28 @@ enum HttpError {
 #[derive(Debug, Deserialize, Serialize)]
 struct ApiResponse {
     code: u32,
-    message: String,
-    data: Option<serde_json::Value>,
+    holiday: serde_json::Value,
 }
 
 // GET 请求示例
 #[tauri::command]
 async fn http_get(url: &str) -> Result<ApiResponse, HttpError> {
+    // 替换 {year} 为当前年份
+    // 获取本地时区的当前年份
+    let local_year = Local::now().year();
+
+    // 获取 UTC 时区的当前年份（适合跨时区场景）
+    // let utc_year = Utc::now().year();
+    let final_url = url.replace("{year}", &format!("{}", local_year));
+
+    println!("Sending GET request to {}", final_url);
+
     // 创建 HTTP 客户端
     let client = reqwest::Client::new();
     
     // 发送 GET 请求
-    let response = client
-        .get(url)
+    let response: reqwest::Response = client
+        .get(&final_url)
         .send()
         .await
         .map_err(|e| HttpError::NetworkError(e.to_string()))?;

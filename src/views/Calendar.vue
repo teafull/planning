@@ -19,10 +19,10 @@ import {
 const holidayData = ref(""); // 节假日数据
 
 async function getHolidayData() {
-  console.info("获取节假日数据")
-  console.info(preferences.value)
-  holidayData.value = await invoke("http_get", { url: preferences.holidayApiUrl.value });
-  console.info(holidayData.value)
+  const res = await invoke("http_get", { url: preferences.value.holidayApiUrl });
+  console.log('Rust 响应：', res);
+  holidayData.value = res.holiday;
+  console.log('解析后的 holidayData：', holidayData.value);
 }
 
 // 事件类型配置
