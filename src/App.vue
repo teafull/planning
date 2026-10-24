@@ -1,9 +1,6 @@
 <script setup>
 import { useRoute } from 'vue-router'
 import { Calendar, Grid, Tickets, DataAnalysis, Setting } from '@element-plus/icons-vue'
-import { initTheme } from './store/theme'
-
-initTheme()
 
 const route = useRoute()
 

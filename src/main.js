@@ -7,6 +7,10 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import App from "./App.vue";
 import router from './router'
+import { initTheme } from './store/theme'
+
+// 主题初始化(应用级, 避免视图热更新导致 watch 失效)
+initTheme()
 
 createApp(App).use(ElementPlus, {
   locale: zhCn
