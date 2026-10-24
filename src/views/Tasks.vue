@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { events, loadEvents } from '../store/events'
+import { invoke } from '@tauri-apps/api/core'
 
 const eventTypes = [
   { value: 'task', label: '任务', color: '#667eea', bgColor: 'linear-gradient(135deg, #667eea 0%, #5a67d8 100%)' },
@@ -218,7 +219,7 @@ const copyTodayList = async () => {
   }
 }
 
-const QUADRANT_STORAGE_KEY = 'tool-quadrant-tasks'
+const QUADRANT_STORAGE_KEY = 'tasks.quadrants'
 
 const quadrantInputs = ref({
   q1: '',
@@ -262,9 +263,9 @@ const quadrants = ref([
   }
 ])
 
-const loadQuadrants = () => {
+const loadQuadrants = async () => {
   try {
-    const raw = localStorage.getItem(QUADRANT_STORAGE_KEY)
+    const raw = await invoke('db_get_kv', { key: 'tasks.quadrants' })
     if (!raw) return
     const parsed = JSON.parse(raw)
     quadrants.value = quadrants.value.map(quadrant => ({
@@ -272,7 +273,7 @@ const loadQuadrants = () => {
       tasks: Array.isArray(parsed?.[quadrant.id]) ? parsed[quadrant.id] : []
     }))
   } catch (error) {
-    // ignore
+    console.error('加载四象限失败:', error)
   }
 }
 
@@ -281,7 +282,7 @@ const saveQuadrants = () => {
     acc[quadrant.id] = quadrant.tasks
     return acc
   }, {})
-  localStorage.setItem(QUADRANT_STORAGE_KEY, JSON.stringify(payload))
+  invoke('db_set_kv', { key: 'tasks.quadrants', value: JSON.stringify(payload) }).catch(e => console.error('保存四象限失败:', e))
 }
 
 const addQuadrantTask = (quadrantId) => {
@@ -305,7 +306,7 @@ const removeQuadrantTask = (quadrantId, taskId) => {
 
 watch(quadrants, saveQuadrants, { deep: true })
 
-const QUICK_NOTES_KEY = 'tool-quick-notes'
+const QUICK_NOTES_KEY = 'tasks.quickNotes'
 
 const quickNotes = ref([])
 const quickInput = ref('')
@@ -331,16 +332,18 @@ const deleteQuickNote = (id) => {
   saveNotes()
 }
 
-const loadNotes = () => {
-  const raw = localStorage.getItem(QUICK_NOTES_KEY)
-  if (!raw) return
+const loadNotes = async () => {
   try {
+    const raw = await invoke('db_get_kv', { key: QUICK_NOTES_KEY })
+    if (!raw) return
     quickNotes.value = JSON.parse(raw)
-  } catch {}
+  } catch (error) {
+    console.error('加载灵感笔记失败:', error)
+  }
 }
 
 const saveNotes = () => {
-  localStorage.setItem(QUICK_NOTES_KEY, JSON.stringify(quickNotes.value))
+  invoke('db_set_kv', { key: QUICK_NOTES_KEY, value: JSON.stringify(quickNotes.value) }).catch(e => console.error('保存灵感笔记失败:', e))
 }
 
 const formatNoteTime = (iso) => {

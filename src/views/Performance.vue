@@ -1,9 +1,10 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { invoke } from '@tauri-apps/api/core'
 
-const PERFORMANCE_STORAGE_KEY = 'performance-items'
-const DECOMPOSITION_STORAGE_KEY = 'performance-decomposition'
+const PERFORMANCE_STORAGE_KEY = 'performance.items'
+const DECOMPOSITION_STORAGE_KEY = 'performance.decompositions'
 
 const activeTab = ref('kpis')
 const items = ref([])
@@ -16,31 +17,35 @@ const showDecomposeDialog = ref(false)
 const selectedDecomposeTarget = ref(null)
 const decomposeEvents = ref('')
 
-const loadItems = () => {
-  const raw = localStorage.getItem(PERFORMANCE_STORAGE_KEY)
-  if (raw) {
-    try {
+const loadItems = async () => {
+  try {
+    const raw = await invoke('db_get_kv', { key: PERFORMANCE_STORAGE_KEY })
+    if (raw) {
       items.value = JSON.parse(raw)
-    } catch {}
+    }
+  } catch (e) {
+    console.error('加载绩效项失败:', e)
   }
   loadDecompositions()
 }
 
 const saveItems = () => {
-  localStorage.setItem(PERFORMANCE_STORAGE_KEY, JSON.stringify(items.value))
+  invoke('db_set_kv', { key: PERFORMANCE_STORAGE_KEY, value: JSON.stringify(items.value) }).catch(e => console.error('保存绩效项失败:', e))
 }
 
-const loadDecompositions = () => {
-  const raw = localStorage.getItem(DECOMPOSITION_STORAGE_KEY)
-  if (raw) {
-    try {
+const loadDecompositions = async () => {
+  try {
+    const raw = await invoke('db_get_kv', { key: DECOMPOSITION_STORAGE_KEY })
+    if (raw) {
       decompositions.value = JSON.parse(raw)
-    } catch {}
+    }
+  } catch (e) {
+    console.error('加载分解记录失败:', e)
   }
 }
 
 const saveDecompositions = () => {
-  localStorage.setItem(DECOMPOSITION_STORAGE_KEY, JSON.stringify(decompositions.value))
+  invoke('db_set_kv', { key: DECOMPOSITION_STORAGE_KEY, value: JSON.stringify(decompositions.value) }).catch(e => console.error('保存分解记录失败:', e))
 }
 
 // KPI 管理

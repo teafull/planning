@@ -1,6 +1,8 @@
 import { ref, watch } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 
-const STORAGE_KEY = 'app-settings'
+// 应用设置 —— SQLite KV 后端(key: 'settings', 整体 JSON)
+// 对外导出与旧版完全一致
 
 const DEFAULT_SETTINGS = {
   profile: {
@@ -48,26 +50,7 @@ const DEFAULT_SETTINGS = {
   }
 }
 
-const loadFromStorage = () => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return structuredClone(DEFAULT_SETTINGS)
-    const saved = JSON.parse(raw)
-    // 深合并，保证新增默认字段不会丢失
-    return {
-      profile: { ...DEFAULT_SETTINGS.profile, ...saved.profile },
-      preferences: { ...DEFAULT_SETTINGS.preferences, ...saved.preferences },
-      notifications: { ...DEFAULT_SETTINGS.notifications, ...saved.notifications },
-      privacy: { ...DEFAULT_SETTINGS.privacy, ...saved.privacy },
-      storage: { ...DEFAULT_SETTINGS.storage, ...saved.storage },
-      ai: { ...DEFAULT_SETTINGS.ai, ...saved.ai }
-    }
-  } catch {
-    return structuredClone(DEFAULT_SETTINGS)
-  }
-}
-
-const initial = loadFromStorage()
+const initial = structuredClone(DEFAULT_SETTINGS)
 
 export const profile = ref(initial.profile)
 export const preferences = ref(initial.preferences)
@@ -76,18 +59,52 @@ export const privacy = ref(initial.privacy)
 export const storage = ref(initial.storage)
 export const ai = ref(initial.ai)
 
-const saveToStorage = () => {
+let hydrated = false
+let saveTimer = null
+
+const collect = () => ({
+  profile: profile.value,
+  preferences: preferences.value,
+  notifications: notifications.value,
+  privacy: privacy.value,
+  storage: storage.value,
+  ai: ai.value
+})
+
+const persist = async () => {
+  if (!hydrated) return
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      profile: profile.value,
-      preferences: preferences.value,
-      notifications: notifications.value,
-      privacy: privacy.value,
-      storage: storage.value,
-      ai: ai.value
-    }))
-  } catch {
-    // ignore
+    await invoke('db_set_kv', { key: 'settings', value: JSON.stringify(collect()) })
+  } catch (e) {
+    console.error('保存设置失败(SQLite):', e)
+  }
+}
+
+const scheduleSave = () => {
+  if (!hydrated) return
+  clearTimeout(saveTimer)
+  saveTimer = setTimeout(persist, 500)
+}
+
+watch([profile, preferences, notifications, privacy, storage, ai], scheduleSave, { deep: true })
+
+/// 启动时从 SQLite 水合(深合并, 保留新增默认字段)
+export const hydrateSettings = async () => {
+  try {
+    const raw = await invoke('db_get_kv', { key: 'settings' })
+    if (raw) {
+      const saved = JSON.parse(raw)
+      Object.assign(profile.value, DEFAULT_SETTINGS.profile, saved.profile)
+      Object.assign(preferences.value, DEFAULT_SETTINGS.preferences, saved.preferences)
+      Object.assign(notifications.value, DEFAULT_SETTINGS.notifications, saved.notifications)
+      Object.assign(privacy.value, DEFAULT_SETTINGS.privacy, saved.privacy)
+      Object.assign(storage.value, DEFAULT_SETTINGS.storage, saved.storage)
+      Object.assign(ai.value, DEFAULT_SETTINGS.ai, saved.ai)
+    }
+  } catch (e) {
+    console.error('加载设置失败(SQLite):', e)
+  } finally {
+    hydrated = true
   }
 }
 
@@ -100,8 +117,6 @@ export const resetSettings = () => {
   storage.value = defaults.storage
   ai.value = defaults.ai
 }
-
-watch([profile, preferences, notifications, privacy, storage, ai], saveToStorage, { deep: true })
 
 // AI模型管理函数
 export const addModel = (modelData) => {
@@ -120,28 +135,28 @@ export const addModel = (modelData) => {
 }
 
 export const removeModel = (modelId) => {
-  const index = ai.value.models.findIndex(model => model.id === modelId)
+  const index = ai.value.models.findIndex(m => m.id === modelId)
   if (index > -1) {
     ai.value.models.splice(index, 1)
     // 如果删除的是当前选中的模型，则选择第一个可用的模型
     if (ai.value.selectedModelId === modelId) {
-      const firstModel = ai.value.models.find(model => model.enabled)
+      const firstModel = ai.value.models.find(m => m.enabled)
       ai.value.selectedModelId = firstModel ? firstModel.id : ''
     }
   }
 }
 
 export const updateModel = (modelId, updates) => {
-  const model = ai.value.models.find(model => model.id === modelId)
+  const model = ai.value.models.find(m => m.id === modelId)
   if (model) {
     Object.assign(model, updates)
   }
 }
 
 export const getSelectedModel = () => {
-  return ai.value.models.find(model => model.id === ai.value.selectedModelId)
+  return ai.value.models.find(m => m.id === ai.value.selectedModelId)
 }
 
 export const getEnabledModels = () => {
-  return ai.value.models.filter(model => model.enabled)
+  return ai.value.models.filter(m => m.enabled)
 }

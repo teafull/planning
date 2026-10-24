@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use chrono::{Local, Datelike};
 
+mod db;
+
 // 自定义错误类型，方便前端处理
 #[derive(Debug, Error, Serialize)]
 enum HttpError {
@@ -72,6 +74,11 @@ fn greet(name: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default().setup(|app| {
+        // 初始化 SQLite 存储(失败不阻塞窗口, 前端命令会报错)
+        if let Err(e) = db::init(app.handle()) {
+            eprintln!("数据库初始化失败: {e}");
+        }
+
         let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
         let about_i = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
         let menu = Menu::with_items(app, &[&about_i, &  quit_i])?;
@@ -132,7 +139,16 @@ pub fn run() {
     })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![greet, http_get])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            http_get,
+            db::db_get_events,
+            db::db_save_events,
+            db::db_get_kv,
+            db::db_set_kv,
+            db::db_set_kv_multi,
+            db::db_backup
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
