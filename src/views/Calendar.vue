@@ -1531,7 +1531,7 @@ const debugWeekDaysCalculation = () => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: #f5f5f5;
+  background: #f8fafc;
   overflow: hidden;
 }
 

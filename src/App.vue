@@ -32,7 +32,7 @@ const route = useRoute()
 .app-layout {
   display: flex;
   height: 100vh;
-  background: #f7f7f8;
+  background: #f8fafc;
 }
 
 
