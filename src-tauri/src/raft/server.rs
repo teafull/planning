@@ -38,6 +38,40 @@ pub struct PromoteRequest {
 }
 
 #[derive(Deserialize)]
+pub struct RemoveRequest {
+    pub raft_id: NodeId,
+}
+
+async fn cluster_remove(
+    State(app): State<AppState>,
+    Json(req): Json<RemoveRequest>,
+) -> Json<GenericResponse> {
+    if app.handle.raft.metrics().borrow().state != openraft::ServerState::Leader {
+        return Json(GenericResponse { ok: false, msg: "本节点不是 Leader".into() });
+    }
+    let voters: std::collections::BTreeSet<NodeId> = app
+        .handle
+        .raft
+        .metrics()
+        .borrow()
+        .membership_config
+        .nodes()
+        .map(|(id, _)| *id)
+        .collect();
+    let remaining: std::collections::BTreeSet<NodeId> =
+        voters.into_iter().filter(|id| *id != req.raft_id).collect();
+    match app
+        .handle
+        .raft
+        .change_membership(openraft::ChangeMembers::ReplaceAllVoters(remaining), true)
+        .await
+    {
+        Ok(_) => Json(GenericResponse { ok: true, msg: format!("已移除节点 {}", req.raft_id) }),
+        Err(e) => Json(GenericResponse { ok: false, msg: format!("{e}") }),
+    }
+}
+
+#[derive(Deserialize)]
 pub struct ProposeRequest {
     pub command: super::RaftCommand,
 }
@@ -169,7 +203,9 @@ async fn cluster_status(State(app): State<AppState>) -> Json<serde_json::Value> 
     }))
 }
 
-pub async fn start_server(handle: std::sync::Arc<RaftHandle>) -> Result<(), String> {
+pub async fn start_server(
+    handle: std::sync::Arc<RaftHandle>,
+) -> Result<tokio::task::JoinHandle<()>, String> {
     let addr = format!("0.0.0.0:{}", handle.listen_port);
     let state = AppState { handle: handle.clone() };
 
@@ -179,6 +215,7 @@ pub async fn start_server(handle: std::sync::Arc<RaftHandle>) -> Result<(), Stri
         .route("/raft/snapshot", post(install_snapshot))
         .route("/cluster/join", post(cluster_join))
         .route("/cluster/promote", post(cluster_promote))
+        .route("/cluster/remove", post(cluster_remove))
         .route("/cluster/propose", post(cluster_propose))
         .route("/cluster/status", get(cluster_status))
         .with_state(state);
@@ -186,8 +223,8 @@ pub async fn start_server(handle: std::sync::Arc<RaftHandle>) -> Result<(), Stri
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("监听 {addr} 失败: {e}"))?;
-    tokio::spawn(async move {
+    let jh = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
     });
-    Ok(())
+    Ok(jh)
 }

@@ -279,7 +279,7 @@ pub async fn db_save_events(
     cluster: tauri::State<'_, ClusterState>,
     events: Vec<Value>,
 ) -> Result<(), String> {
-    // 同步段: diff + 路由 + 本地路径应用
+    // 集群模式: 离线模式 → 本地应用+入队; 在线 → local 立即应用, cluster 提议
     let cluster_cmds = {
         let mut conn = db.0.lock().unwrap();
         let diff = diff_events(&conn, &events)?;
@@ -302,7 +302,19 @@ pub async fn db_save_events(
             return Ok(());
         }
 
-        // 集群模式: local 路径立即本地应用
+        if is_offline_mode(&conn) {
+            // 离线模式: 本地立即生效 + 命令入队待重连重放
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            for cmd in routed.iter_all() {
+                apply_command(&tx, cmd)?;
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+            for cmd in &routed.cluster {
+                pending_push(&conn, cmd)?;
+            }
+            return Ok(());
+        }
+
         if !routed.local.is_empty() {
             let tx = conn.transaction().map_err(|e| e.to_string())?;
             for cmd in &routed.local {
@@ -313,13 +325,18 @@ pub async fn db_save_events(
         routed.cluster
     };
 
-    // 集群路径: 提议(本机 Leader 直写 / 转发)
+    // 集群路径: 提议(本机 Leader 直写 / 转发), 成功后尽力重放积压
     if !cluster_cmds.is_empty() {
-        let guard = cluster.handle.lock().await;
-        let handle = guard.as_ref().ok_or("集群句柄缺失")?;
-        for cmd in &cluster_cmds {
-            ensure_proposed(handle, cmd).await?;
+        {
+            let guard = cluster.handle.lock().await;
+            let handle = guard.as_ref().ok_or("集群句柄缺失")?;
+            for cmd in &cluster_cmds {
+                ensure_proposed(handle, cmd).await.map_err(|e| {
+                    format!("{e}; 集群可能不可用, 可在设置中开启离线模式")
+                })?;
+            }
         }
+        let _ = flush_pending(&db, &cluster).await;
     }
     Ok(())
 }
@@ -394,6 +411,83 @@ use crate::raft::RaftHandle;
 #[derive(Default)]
 pub struct ClusterState {
     pub handle: tokio::sync::Mutex<Option<std::sync::Arc<RaftHandle>>>,
+    /// axum 服务任务(退出集群时中止, 释放端口)
+    pub server_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+// ---------- 离线队列(kv 本地键) ----------
+
+fn pending_cmds(conn: &Connection) -> Vec<RaftCommand> {
+    crate::raft_cmd::kv_get(conn, "cluster.pending")
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn pending_push(conn: &Connection, cmd: &RaftCommand) -> Result<(), String> {
+    let mut v = pending_cmds(conn);
+    v.push(cmd.clone());
+    crate::raft_cmd::kv_upsert(
+        conn,
+        "cluster.pending",
+        &serde_json::to_string(&v).map_err(|e| e.to_string())?,
+    )
+}
+
+fn pending_take_all(conn: &Connection) -> Vec<RaftCommand> {
+    let v = pending_cmds(conn);
+    let _ = crate::raft_cmd::kv_upsert(conn, "cluster.pending", "[]");
+    v
+}
+
+fn pending_prepend(conn: &Connection, cmds: Vec<RaftCommand>) -> Result<(), String> {
+    let mut all = cmds;
+    all.extend(pending_cmds(conn));
+    crate::raft_cmd::kv_upsert(
+        conn,
+        "cluster.pending",
+        &serde_json::to_string(&all).map_err(|e| e.to_string())?,
+    )
+}
+
+fn is_offline_mode(conn: &Connection) -> bool {
+    crate::raft_cmd::kv_get(conn, "cluster.offline")
+        .ok()
+        .flatten()
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
+/// 重放积压命令: 逐条提议, 失败时剩余回队首
+async fn flush_pending(
+    db: &tauri::State<'_, Db>,
+    cluster: &tauri::State<'_, ClusterState>,
+) -> Result<usize, String> {
+    let cmds = {
+        let conn = db.0.lock().unwrap();
+        pending_take_all(&conn)
+    };
+    if cmds.is_empty() {
+        return Ok(0);
+    }
+    let guard = cluster.handle.lock().await;
+    let Some(handle) = guard.as_ref() else {
+        let conn = db.0.lock().unwrap();
+        pending_prepend(&conn, cmds)?;
+        return Err("集群未启用".into());
+    };
+    let mut done = 0;
+    for (i, cmd) in cmds.iter().enumerate() {
+        if let Err(e) = ensure_proposed(handle, cmd).await {
+            let rest: Vec<RaftCommand> = cmds[i..].to_vec();
+            let conn = db.0.lock().unwrap();
+            pending_prepend(&conn, rest)?;
+            return Err(e);
+        }
+        done += 1;
+    }
+    Ok(done)
 }
 
 /// 局域网 IP(UDP 探测, 不实际发包)
@@ -483,7 +577,8 @@ pub async fn cluster_create(
         .map_err(|e| format!("初始化失败: {e}"))?;
 
     let handle_with_token = handle;
-    crate::raft::server::start_server(handle_with_token.clone()).await?;
+    let jh = crate::raft::server::start_server(handle_with_token.clone()).await?;
+    *cluster.server_task.lock().await = Some(jh);
 
     // 持久化配置(保留已有 syncSince)
     {
@@ -568,7 +663,8 @@ pub async fn cluster_join(
         (std::path::PathBuf::from(p), dir)
     };
     let handle = crate::raft::start_node(my_id, &db_path, data_dir.join("snapshots"), port, Some(token.clone())).await?;
-    crate::raft::server::start_server(handle.clone()).await?;
+    let jh = crate::raft::server::start_server(handle.clone()).await?;
+    *cluster.server_task.lock().await = Some(jh);
 
     // 持久化
     {
@@ -604,10 +700,17 @@ pub async fn cluster_join(
 
 /// 集群状态(未启用时 enabled=false)
 #[tauri::command]
-pub async fn cluster_status(cluster: tauri::State<'_, ClusterState>) -> Result<serde_json::Value, String> {
+pub async fn cluster_status(
+    db: tauri::State<'_, Db>,
+    cluster: tauri::State<'_, ClusterState>,
+) -> Result<serde_json::Value, String> {
     let g = cluster.handle.lock().await;
+    let (offline, pending) = {
+        let conn = db.0.lock().unwrap();
+        (is_offline_mode(&conn), pending_cmds(&conn).len())
+    };
     match g.as_ref() {
-        None => Ok(serde_json::json!({ "enabled": false })),
+        None => Ok(serde_json::json!({ "enabled": false, "offline": offline, "pending": pending })),
         Some(h) => {
             let metrics = h.raft.metrics().borrow().clone();
             let members: Vec<Value> = metrics
@@ -617,6 +720,8 @@ pub async fn cluster_status(cluster: tauri::State<'_, ClusterState>) -> Result<s
                 .collect();
             Ok(serde_json::json!({
                 "enabled": true,
+                "offline": offline,
+                "pending": pending,
                 "nodeId": h.node_id,
                 "state": format!("{:?}", metrics.state),
                 "currentLeader": metrics.current_leader,
@@ -627,4 +732,219 @@ pub async fn cluster_status(cluster: tauri::State<'_, ClusterState>) -> Result<s
             }))
         }
     }
+}
+
+/// 离线模式开关: 开启时写入本地+入队; 关闭时立即尝试重放积压
+#[tauri::command]
+pub async fn cluster_set_offline(
+    db: tauri::State<'_, Db>,
+    cluster: tauri::State<'_, ClusterState>,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    {
+        let conn = db.0.lock().unwrap();
+        crate::raft_cmd::kv_upsert(&conn, "cluster.offline", if enabled { "1" } else { "0" })?;
+    }
+    if !enabled {
+        let n = flush_pending(&db, &cluster).await?;
+        return Ok(serde_json::json!({ "ok": true, "replayed": n }));
+    }
+    Ok(serde_json::json!({ "ok": true, "replayed": 0 }))
+}
+
+/// 手动重放积压命令
+#[tauri::command]
+pub async fn cluster_flush_pending(
+    db: tauri::State<'_, Db>,
+    cluster: tauri::State<'_, ClusterState>,
+) -> Result<serde_json::Value, String> {
+    let n = flush_pending(&db, &cluster).await?;
+    Ok(serde_json::json!({ "ok": true, "replayed": n }))
+}
+
+async fn forward_remove_to_leader(handle: &std::sync::Arc<RaftHandle>, raft_id: u64) -> Result<(), String> {
+    let metrics = handle.raft.metrics().borrow().clone();
+    let leader_id = metrics.current_leader.ok_or("集群无 Leader")?;
+    let addr = metrics
+        .membership_config
+        .nodes()
+        .find(|(id, _)| **id == leader_id)
+        .map(|(_, n)| n.addr.clone())
+        .ok_or("找不到 Leader 地址")?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp: Value = client
+        .post(format!("http://{addr}/cluster/remove"))
+        .json(&serde_json::json!({ "raftId": raft_id }))
+        .send()
+        .await
+        .map_err(|e| format!("转发失败: {e}"))?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    if resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(resp.get("msg").and_then(|v| v.as_str()).unwrap_or("移除失败").to_string())
+    }
+}
+
+async fn shutdown_cluster_local(
+    db: &tauri::State<'_, Db>,
+    cluster: &tauri::State<'_, ClusterState>,
+    handle: &std::sync::Arc<RaftHandle>,
+) -> Result<(), String> {
+    let _ = handle.raft.shutdown().await;
+    if let Some(jh) = cluster.server_task.lock().await.take() {
+        jh.abort();
+    }
+    *cluster.handle.lock().await = None;
+    // 配置回单机(保留 syncSince 供下次使用)
+    let conn = db.0.lock().unwrap();
+    let old: crate::raft::ClusterConfig = crate::raft_cmd::kv_get(&conn, "cluster.config")
+        .ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let cfg = crate::raft::ClusterConfig {
+        token: None,
+        sync_since: old.sync_since,
+        listen_port: None,
+        advertise_addr: None,
+        node_id: None,
+    };
+    crate::raft_cmd::kv_upsert(
+        &conn,
+        "cluster.config",
+        &serde_json::to_string(&cfg).map_err(|e| e.to_string())?,
+    )?;
+    Ok(())
+}
+
+/// 退出集群: 从成员表移除自己(经 Leader), 关停本地 raft/服务, 配置回单机
+#[tauri::command]
+pub async fn cluster_leave(
+    db: tauri::State<'_, Db>,
+    cluster: tauri::State<'_, ClusterState>,
+) -> Result<(), String> {
+    let handle = cluster.handle.lock().await.clone().ok_or("集群未启用")?;
+
+    let voters: std::collections::BTreeSet<u64> = handle
+        .raft
+        .metrics()
+        .borrow()
+        .membership_config
+        .nodes()
+        .map(|(id, _)| *id)
+        .collect();
+    let remaining: std::collections::BTreeSet<u64> =
+        voters.into_iter().filter(|id| *id != handle.node_id).collect();
+
+    if !remaining.is_empty() {
+        if handle.raft.metrics().borrow().state == openraft::ServerState::Leader {
+            handle
+                .raft
+                .change_membership(openraft::ChangeMembers::ReplaceAllVoters(remaining), true)
+                .await
+                .map_err(|e| format!("成员变更失败: {e}"))?;
+        } else {
+            forward_remove_to_leader(&handle, handle.node_id).await?;
+        }
+    }
+
+    shutdown_cluster_local(&db, &cluster, &handle).await
+}
+
+/// 移除其他节点(需 Leader 执行, 非 Leader 自动转发)
+#[tauri::command]
+pub async fn cluster_remove(
+    db: tauri::State<'_, Db>,
+    cluster: tauri::State<'_, ClusterState>,
+    raft_id: u64,
+) -> Result<(), String> {
+    let handle = cluster.handle.lock().await.clone().ok_or("集群未启用")?;
+    if handle.raft.metrics().borrow().state == openraft::ServerState::Leader {
+        let voters: std::collections::BTreeSet<u64> = handle
+            .raft
+            .metrics()
+            .borrow()
+            .membership_config
+            .nodes()
+            .map(|(id, _)| *id)
+            .collect();
+        let remaining: std::collections::BTreeSet<u64> =
+            voters.into_iter().filter(|id| *id != raft_id).collect();
+        handle
+            .raft
+            .change_membership(openraft::ChangeMembers::ReplaceAllVoters(remaining), true)
+            .await
+            .map_err(|e| format!("成员变更失败: {e}"))?;
+        Ok(())
+    } else {
+        forward_remove_to_leader(&handle, raft_id).await
+    }
+}
+
+/// 应用启动时按持久化配置自动重启集群(重连)
+pub async fn auto_start_cluster(app: tauri::AppHandle) {
+    let db = app.state::<Db>();
+    let cluster = app.state::<ClusterState>();
+
+    let cfg: Option<crate::raft::ClusterConfig> = {
+        let conn = db.0.lock().unwrap();
+        crate::raft_cmd::kv_get(&conn, "cluster.config")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str(&s).ok())
+    };
+    let Some(cfg) = cfg else { return };
+    let (Some(node_id), Some(port), Some(token)) = (cfg.node_id, cfg.listen_port, cfg.token) else {
+        return;
+    };
+
+    let (db_path, snap_dir) = {
+        let conn = db.0.lock().unwrap();
+        let p = conn
+            .path()
+            .map(|s| s.to_string())
+            .ok_or_else(|| "无库路径".to_string())
+            .unwrap_or_default();
+        if p.is_empty() {
+            return;
+        }
+        (
+            std::path::PathBuf::from(&p),
+            std::path::Path::new(&p)
+                .parent()
+                .map(|d| d.to_path_buf())
+                .unwrap_or_default(),
+        )
+    };
+
+    match crate::raft::start_node(node_id, &db_path, snap_dir.join("snapshots"), port, Some(token)).await {
+        Ok(handle) => match crate::raft::server::start_server(handle.clone()).await {
+            Ok(jh) => {
+                *cluster.server_task.lock().await = Some(jh);
+                *cluster.handle.lock().await = Some(handle);
+                println!("[集群] 已按配置自动重启: node={node_id} port={port}");
+            }
+            Err(e) => eprintln!("[集群] 服务启动失败: {e}"),
+        },
+        Err(e) => eprintln!("[集群] 自动重启失败: {e}"),
+    }
+
+    // 周期性重放积压(离线恢复兑底)
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let db = app.state::<Db>();
+            let cluster = app.state::<ClusterState>();
+            let has_pending = {
+                let conn = db.0.lock().unwrap();
+                !pending_cmds(&conn).is_empty()
+            };
+            if has_pending && !cluster.handle.lock().await.is_none() {
+                let _ = flush_pending(&db, &cluster).await;
+            }
+        }
+    });
 }

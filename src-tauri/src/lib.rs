@@ -81,6 +81,11 @@ pub fn run() {
             eprintln!("数据库初始化失败: {e}");
         }
         app.manage(db::ClusterState::default());
+        // 按持久化配置自动重连集群(异步, 不阻塞窗口)
+        let h = app.handle().clone();
+        tauri::async_runtime::spawn(async move {
+            db::auto_start_cluster(h).await;
+        });
 
         let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
         let about_i = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
@@ -159,7 +164,11 @@ pub fn run() {
             db::db_set_cluster_config,
             db::cluster_create,
             db::cluster_join,
-            db::cluster_status
+            db::cluster_status,
+            db::cluster_leave,
+            db::cluster_remove,
+            db::cluster_set_offline,
+            db::cluster_flush_pending
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
