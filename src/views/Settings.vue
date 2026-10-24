@@ -174,7 +174,6 @@ onMounted(() => {
 onUnmounted(() => clearInterval(statusTimer))
 
 import {
-  profile,
   preferences,
   notifications,
   privacy,
@@ -279,23 +278,6 @@ const handleDialogClose = (done) => {
     <div class="page-body">
 
     <section class="settings-grid">
-      <el-card class="settings-card" shadow="never">
-        <template #header>
-          <div class="card-title">个人信息</div>
-        </template>
-        <el-form label-width="90px" class="settings-form">
-          <el-form-item label="姓名">
-            <el-input v-model="profile.name" placeholder="输入姓名" />
-          </el-form-item>
-          <el-form-item label="职位">
-            <el-input v-model="profile.title" placeholder="输入职位" />
-          </el-form-item>
-          <el-form-item label="邮箱">
-            <el-input v-model="profile.email" placeholder="输入邮箱" />
-          </el-form-item>
-        </el-form>
-      </el-card>
-
       <el-card class="settings-card" shadow="never">
         <template #header>
           <div class="card-title">外观偏好</div>
