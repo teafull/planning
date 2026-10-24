@@ -79,6 +79,7 @@
               'holiday': isHoliday(day.date)
             }"
             @click="selectDate(day)"
+            @contextmenu.prevent="onDayContextMenu($event, day)"
           >
             <div class="day-content">
               <div class="day-number">
@@ -231,14 +232,29 @@
         </div>
       </div>
     </el-drawer>
+
+    <!-- 右键菜单 -->
+    <Teleport to="body">
+      <div
+        v-if="ctxMenu"
+        class="ctx-menu"
+        :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+      >
+        <div class="ctx-item" :class="{ 'ctx-disabled': !clipboard }" @click="clipboard && doPaste()">
+          粘贴<template v-if="clipboard">「{{ clipboard.event.title || '未命名' }}」</template>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft, ArrowRight, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
+import { ElNotification } from 'element-plus'
 import { events } from '../store/events.js'
+import { clipboard, pasteEvent } from '../store/clipboard'
 
 // 响应式数据
 const currentDate = ref(new Date())
@@ -796,8 +812,45 @@ const debugMonthCalendar = (year, month) => {
   console.log('================================')
 }
 
+// ========== 右键粘贴事件 ==========
+const ctxMenu = ref(null) // { x, y, date }
+
+const onDayContextMenu = (e, day) => {
+  e.preventDefault()
+  ctxMenu.value = {
+    x: Math.min(e.clientX, window.innerWidth - 190),
+    y: Math.min(e.clientY, window.innerHeight - 110),
+    date: day.date
+  }
+}
+
+const closeCtxMenu = () => { ctxMenu.value = null }
+
+const onOutsideMouseDown = (e) => {
+  if (ctxMenu.value && !(e.target && e.target.closest && e.target.closest('.ctx-menu'))) {
+    closeCtxMenu()
+  }
+}
+
+const doPaste = () => {
+  const m = ctxMenu.value
+  if (!m || !clipboard.value) return
+  const newEvent = pasteEvent(m.date)
+  if (newEvent) {
+    const timeText = newEvent.isAllDay ? '全天' : `${String(Math.floor(newEvent.startTime)).padStart(2, '0')}:${newEvent.startTime % 1 ? '30' : '00'}-${String(Math.floor(newEvent.endTime)).padStart(2, '0')}:${newEvent.endTime % 1 ? '30' : '00'}`
+    ElNotification({
+      title: '已粘贴',
+      message: `「${newEvent.title || '未命名'}」→ ${newEvent.date} ${timeText}`,
+      type: 'success',
+      duration: 2000
+    })
+  }
+  closeCtxMenu()
+}
+
 // 组件挂载
 onMounted(() => {
+  document.addEventListener('mousedown', onOutsideMouseDown)
   loadHolidayData()
   debugEventDuplicates()
   
@@ -806,9 +859,41 @@ onMounted(() => {
   
   console.log('月视图组件已挂载')
 })
+
+onUnmounted(() => {
+  document.removeEventListener('mousedown', onOutsideMouseDown)
+})
 </script>
 
 <style scoped>
+/* 右键菜单 */
+.ctx-menu {
+  position: fixed;
+  z-index: 3000;
+  min-width: 170px;
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.15);
+  padding: 4px;
+  font-size: 13px;
+  color: #333;
+}
+.ctx-item {
+  padding: 7px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ctx-item:hover { background: #f0f4ff; color: #409eff; }
+.ctx-item.ctx-disabled { color: #bbb; cursor: not-allowed; }
+.ctx-item.ctx-disabled:hover { background: transparent; color: #bbb; }
+
+@media (prefers-color-scheme: dark) {
+  .ctx-menu { background: #2f2f2f; border-color: #3a3a3a; color: #ddd; }
+  .ctx-item:hover { background: #3a3a3a; color: #7aa7ff; }
+}
+
 .month-view {
   display: flex;
   flex-direction: column;

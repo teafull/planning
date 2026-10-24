@@ -4,6 +4,7 @@ import { ElDialog, ElForm, ElFormItem, ElInput, ElDatePicker, ElButton, ElSelect
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { sendNotification, requestPermission, isPermissionGranted } from '@tauri-apps/plugin-notification'
 import { events, loadEvents } from '../store/events'
+import { clipboard, copyEvent, pasteEvent, duplicateEvent, placeEventCopy } from '../store/clipboard'
 import { invoke } from "@tauri-apps/api/core";
 
 // 日历配置参数
@@ -368,8 +369,9 @@ const getEventDetailHtml = (event) => {
   `
 }
 
-// 开始拖拽
+// 开始拖拽（仅左键，右键留给菜单）
 const startDrag = (e, day, slot) => {
+  if (e.button !== 0) return
   isDragging.value = true
   dragDay.value = day
   dragStartTime.value = slot.value
@@ -503,6 +505,208 @@ const endResize = () => {
   document.body.style.userSelect = ''
 }
 
+// ========== 右键菜单 ==========
+const ctxMenu = ref(null) // { x, y, kind: 'event'|'slot', event?, day?, slot? }
+
+const onEventContextMenu = (e, event) => {
+  e.preventDefault()
+  e.stopPropagation()
+  ctxMenu.value = {
+    x: Math.min(e.clientX, window.innerWidth - 190),
+    y: Math.min(e.clientY, window.innerHeight - 250),
+    kind: 'event',
+    event
+  }
+}
+
+const onSlotContextMenu = (e, day, slot) => {
+  e.preventDefault()
+  ctxMenu.value = {
+    x: Math.min(e.clientX, window.innerWidth - 190),
+    y: Math.min(e.clientY, window.innerHeight - 140),
+    kind: 'slot',
+    day,
+    slot: slot.value
+  }
+}
+
+const closeCtxMenu = () => { ctxMenu.value = null }
+
+// 点击菜单外部关闭（点击菜单内部不关闭）
+const onOutsideMouseDown = (e) => {
+  if (ctxMenu.value && !(e.target && e.target.closest && e.target.closest('.ctx-menu'))) {
+    closeCtxMenu()
+  }
+}
+
+const notify = (title, message) => {
+  ElNotification({ title, message, type: 'success', duration: 2000 })
+}
+
+const doCopy = () => {
+  const ev = ctxMenu.value?.event
+  if (!ev) return
+  copyEvent(ev)
+  notify('已复制', `「${ev.title || '未命名'}」已复制，在目标格子右键可粘贴`)
+  closeCtxMenu()
+}
+
+const doCopyNextWeek = () => {
+  const ev = ctxMenu.value?.event
+  if (!ev) return
+  const src = events.value.find(e => e.id === ev.id) || ev
+  const newEvent = duplicateEvent(src, 7)
+  notify('已复制到下周', `「${newEvent.title || '未命名'}」→ ${newEvent.date}`)
+  closeCtxMenu()
+}
+
+// 以副本模式打开编辑弹窗（保存时作为新事件添加，不覆盖原事件）
+const doSaveAsCopy = () => {
+  const ev = ctxMenu.value?.event
+  if (!ev) return
+  const src = events.value.find(e => e.id === ev.id) || ev
+  currentEvent.value = { ...src, id: Date.now() } // 新 id，saveEvent 会走新增分支
+  form.value = {
+    title: src.title,
+    date: src.date,
+    endDate: src.endDate || src.date,
+    startTime: src.startTime,
+    endTime: src.endTime,
+    description: src.description || '',
+    type: src.type,
+    isAllDay: src.isAllDay
+  }
+  showDialog.value = true
+  closeCtxMenu()
+}
+
+const doCtxEdit = () => {
+  const ev = ctxMenu.value?.event
+  if (!ev) return
+  openEventDialog(ev)
+  closeCtxMenu()
+}
+
+const doCtxDelete = () => {
+  const ev = ctxMenu.value?.event
+  if (!ev) return
+  deleteEventItem(ev)
+  closeCtxMenu()
+}
+
+const doPaste = () => {
+  const m = ctxMenu.value
+  if (!m || !clipboard.value) return
+  const newEvent = pasteEvent(formatDateLocal(m.day), m.slot, { min: START_HOUR.value, max: END_HOUR.value })
+  if (newEvent) {
+    const timeText = newEvent.isAllDay ? '全天' : `${formatTime(newEvent.startTime)}-${formatTime(newEvent.endTime)}`
+    notify('已粘贴', `「${newEvent.title || '未命名'}」→ ${newEvent.date} ${timeText}`)
+  }
+  closeCtxMenu()
+}
+
+// 在目标格子新建事件（复用创建流程）
+const doCreateAt = () => {
+  const m = ctxMenu.value
+  if (!m) return
+  const dateStr = formatDateLocal(m.day)
+  currentEvent.value = {
+    id: Date.now(),
+    date: dateStr,
+    startTime: m.slot,
+    endTime: Math.min(m.slot + 1, END_HOUR.value),
+    title: '',
+    type: 'task',
+    isAllDay: false
+  }
+  form.value = { ...currentEvent.value, description: '', endDate: dateStr }
+  showDialog.value = true
+  closeCtxMenu()
+}
+
+// ========== Ctrl+拖拽复制事件 ==========
+const dragCopy = ref(null) // { src, startX, startY, started, ghost: {x,y}, drop: {date,start,left,top,width,height}|null }
+
+// 光标 → 目标时间槽（吸附 0.5h，返回槽元素矩形供预览定位）
+const cursorToSlot = (e) => {
+  const el = document.elementFromPoint(e.clientX, e.clientY)
+  const slotEl = el && el.closest ? el.closest('.time-slot[data-date]') : null
+  if (!slotEl) return null
+  const rect = slotEl.getBoundingClientRect()
+  const value = parseFloat(slotEl.dataset.value)
+  const snapped = Math.round((value + (e.clientY - rect.top) / 30) * 2) / 2
+  return { date: slotEl.dataset.date, slot: snapped, rect }
+}
+
+// 计算落点（光标位置即副本开始时间，越界时保时长前移）与预览几何
+const computeDrop = (e, dc) => {
+  const pos = cursorToSlot(e)
+  if (!pos) { dc.drop = null; return }
+  const duration = dc.src.endTime - dc.src.startTime
+  const start = Math.max(START_HOUR.value, Math.min(pos.slot, END_HOUR.value - duration))
+  dc.drop = {
+    date: pos.date,
+    start,
+    left: pos.rect.left,
+    width: pos.rect.width,
+    top: pos.rect.top - (pos.slot - start) * 60,
+    height: duration * 60
+  }
+}
+
+const onEventMouseDown = (e, event) => {
+  if (e.ctrlKey || e.metaKey) {
+    // Ctrl+拖拽 = 复制到新位置；位移<4px 视为普通点击
+    e.preventDefault()
+    e.stopPropagation()
+    const src = events.value.find(ev => ev.id === event.id) || event
+    dragCopy.value = {
+      src,
+      startX: e.clientX,
+      startY: e.clientY,
+      started: false,
+      ghost: { x: e.clientX, y: e.clientY },
+      drop: null
+    }
+  } else {
+    openEventDialog(event)
+  }
+}
+
+const onDragCopyMove = (e) => {
+  const dc = dragCopy.value
+  if (!dc) return
+  dc.ghost = { x: e.clientX, y: e.clientY }
+  if (!dc.started && Math.hypot(e.clientX - dc.startX, e.clientY - dc.startY) > 4) {
+    dc.started = true
+    document.body.style.cursor = 'copy'
+    document.body.style.userSelect = 'none'
+    document.body.classList.add('dragging-copy')
+  }
+  if (dc.started) computeDrop(e, dc)
+}
+
+const onDragCopyEnd = (e) => {
+  const dc = dragCopy.value
+  if (!dc) return
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  document.body.classList.remove('dragging-copy')
+  if (!dc.started) { // 视为普通点击，不产生副本
+    dragCopy.value = null
+    return
+  }
+
+  computeDrop(e, dc)
+  const drop = dc.drop
+  dragCopy.value = null
+  if (!drop) return // 未落在时间格子上，取消
+
+  const newEvent = placeEventCopy(dc.src, drop.date, drop.start, { min: START_HOUR.value, max: END_HOUR.value })
+  const timeText = newEvent.isAllDay ? '全天' : `${formatTime(newEvent.startTime)}-${formatTime(newEvent.endTime)}`
+  notify('已复制事件', `「${newEvent.title || '未命名'}」→ ${newEvent.date} ${timeText}`)
+}
+
 // 事件弹窗
 const showDialog = ref(false)
 const currentEvent = ref(null)
@@ -588,6 +792,35 @@ const saveEvent = () => {
       events.value.push(newEvent)
     }
   }
+  showDialog.value = false
+}
+
+// 另存为副本：以当前表单内容保存为新事件，不影响原事件
+const saveEventAsCopy = () => {
+  if (!currentEvent.value) return
+  const newEvent = {
+    ...currentEvent.value,
+    id: Date.now(),
+    title: form.value.title,
+    type: form.value.type,
+    isAllDay: form.value.isAllDay,
+    description: form.value.description
+  }
+  if (form.value.isAllDay) {
+    if (Array.isArray(form.value.date)) {
+      newEvent.date = form.value.date[0]
+      newEvent.endDate = form.value.date[1] || form.value.date[0]
+    } else {
+      newEvent.date = form.value.date
+      newEvent.endDate = form.value.endDate || form.value.date
+    }
+  } else {
+    newEvent.date = form.value.date
+    newEvent.startTime = form.value.startTime
+    newEvent.endTime = form.value.endTime
+  }
+  events.value.push(newEvent)
+  notify('已另存为副本', `「${newEvent.title || '未命名'}」${newEvent.date}`)
   showDialog.value = false
 }
 
@@ -708,6 +941,10 @@ onMounted(() => {
   // 事件时间拖拽调整
   document.addEventListener('mousemove', onResizeMove)
   document.addEventListener('mouseup', endResize)
+  // Ctrl拖拽复制 / 右键菜单关闭
+  document.addEventListener('mousemove', onDragCopyMove)
+  document.addEventListener('mouseup', onDragCopyEnd)
+  document.addEventListener('mousedown', onOutsideMouseDown)
 
   // 启动提醒检查
   startReminderCheck()
@@ -728,6 +965,9 @@ onMounted(() => {
     stopReminderCheck()
     document.removeEventListener('mousemove', onResizeMove)
     document.removeEventListener('mouseup', endResize)
+    document.removeEventListener('mousemove', onDragCopyMove)
+    document.removeEventListener('mouseup', onDragCopyEnd)
+    document.removeEventListener('mousedown', onOutsideMouseDown)
   })
 })
 
@@ -1052,10 +1292,13 @@ const debugWeekDaysCalculation = () => {
               :key="`${slot.hour}-${slot.half}`"
               class="time-slot"
               :class="{ 'half-hour': slot.half === 1, 'weekend': day.getDay() === 0 || day.getDay() === 6, 'is-workday': isWorkday(day) }"
+              :data-date="formatDateLocal(day)"
+              :data-value="slot.value"
               @mousedown="startDrag($event, day, slot)"
               @mousemove="onDrag($event)"
               @mouseup="endDrag($event, day, slot)"
               @mouseleave="isDragging = false"
+              @contextmenu.prevent="onSlotContextMenu($event, day, slot)"
             ></div>
             <!-- 渲染事件（使用绝对定位） -->
             <el-tooltip
@@ -1069,7 +1312,8 @@ const debugWeekDaysCalculation = () => {
               <div
                 class="event-item-absolute"
                 :style="{ ...event.style, background: getEventType(event.type).bgColor }"
-                @mousedown.stop="openEventDialog(event)"
+                @mousedown.stop="onEventMouseDown($event, event)"
+                @contextmenu.prevent.stop="onEventContextMenu($event, event)"
               >
                 <div class="resize-handle handle-top" title="拖拽调整开始时间" @mousedown.stop="startResize($event, event, 'start')"></div>
                 <div class="event-content">
@@ -1179,9 +1423,53 @@ const debugWeekDaysCalculation = () => {
       <template #footer>
         <el-button @click="deleteEvent" type="danger">删除</el-button>
         <el-button @click="showDialog = false">取消</el-button>
+        <el-button @click="saveEventAsCopy">另存为副本</el-button>
         <el-button type="primary" @click="saveEvent">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 右键菜单 -->
+    <Teleport to="body">
+      <div
+        v-if="ctxMenu"
+        class="ctx-menu"
+        :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+      >
+        <template v-if="ctxMenu.kind === 'event'">
+          <div class="ctx-item" @click="doCopy">复制</div>
+          <div class="ctx-item" @click="doCopyNextWeek">复制到下周同一天</div>
+          <div class="ctx-item" @click="doSaveAsCopy">另存为副本…</div>
+          <div class="ctx-sep"></div>
+          <div class="ctx-item" @click="doCtxEdit">编辑</div>
+          <div class="ctx-item ctx-danger" @click="doCtxDelete">删除</div>
+        </template>
+        <template v-else>
+          <div class="ctx-item" :class="{ 'ctx-disabled': !clipboard }" @click="clipboard && doPaste()">
+            粘贴<template v-if="clipboard">「{{ clipboard.event.title || '未命名' }}」</template>
+          </div>
+          <div class="ctx-item" @click="doCreateAt">新建事件</div>
+        </template>
+      </div>
+      <!-- Ctrl拖拽复制：目标位置预览块 + 跟随角标 -->
+      <div
+        v-if="dragCopy && dragCopy.started && dragCopy.drop"
+        class="drag-copy-preview"
+        :style="{
+          left: dragCopy.drop.left + 'px',
+          top: dragCopy.drop.top + 'px',
+          width: dragCopy.drop.width + 'px',
+          height: dragCopy.drop.height + 'px',
+          background: getEventType(dragCopy.src.type).bgColor
+        }"
+      >
+        <span class="drag-copy-title">{{ dragCopy.src.title || '未命名' }}</span>
+      </div>
+      <div
+        v-if="dragCopy && dragCopy.started"
+        class="drag-copy-ghost"
+        :style="{ left: (dragCopy.ghost.x + 14) + 'px', top: (dragCopy.ghost.y + 14) + 'px' }"
+      >+ 复制</div>
+    </Teleport>
   </div>
 </template>
 
@@ -2129,6 +2417,72 @@ const debugWeekDaysCalculation = () => {
   transition: opacity 0.2s;
 }
 .resize-handle:hover::after { opacity: 1; }
+
+/* 右键菜单 */
+.ctx-menu {
+  position: fixed;
+  z-index: 3000;
+  min-width: 170px;
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.15);
+  padding: 4px;
+  font-size: 13px;
+  color: #333;
+}
+.ctx-item {
+  padding: 7px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ctx-item:hover { background: #f0f4ff; color: #409eff; }
+.ctx-item.ctx-disabled { color: #bbb; cursor: not-allowed; }
+.ctx-item.ctx-disabled:hover { background: transparent; color: #bbb; }
+.ctx-sep { height: 1px; background: #eee; margin: 4px 8px; }
+.ctx-danger { color: #f56c6c; }
+.ctx-danger:hover { background: #fef0f0; color: #f56c6c; }
+
+/* Ctrl拖拽复制 */
+.drag-copy-preview {
+  position: fixed;
+  z-index: 2500;
+  border-radius: 4px;
+  border: 2px dashed rgba(255, 255, 255, 0.9);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  opacity: 0.8;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  padding: 2px 6px;
+  color: #fff;
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.drag-copy-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.drag-copy-ghost {
+  position: fixed;
+  z-index: 3001;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 10px;
+  pointer-events: none;
+}
+body.dragging-copy .event-item-absolute { pointer-events: none; }
+
+@media (prefers-color-scheme: dark) {
+  .ctx-menu { background: #2f2f2f; border-color: #3a3a3a; color: #ddd; }
+  .ctx-item:hover { background: #3a3a3a; color: #7aa7ff; }
+  .ctx-sep { background: #3a3a3a; }
+}
 
 /* 单选框样式优化 */
 :deep(.el-radio-group) {
