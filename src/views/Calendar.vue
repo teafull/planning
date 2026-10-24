@@ -461,6 +461,48 @@ const endDrag = (e, day, slot) => {
   dragDay.value = null
 }
 
+// ========== 拖拽调整事件开始/结束时间 ==========
+const resizing = ref(null) // { eventId, mode: 'start'|'end', startY, origStart, origEnd }
+
+const startResize = (e, event, mode) => {
+  e.stopPropagation()
+  e.preventDefault()
+  resizing.value = {
+    eventId: event.id,
+    mode,
+    startY: e.clientY,
+    origStart: event.startTime,
+    origEnd: event.endTime
+  }
+  document.body.style.cursor = 'ns-resize'
+  document.body.style.userSelect = 'none'
+}
+
+const onResizeMove = (e) => {
+  const r = resizing.value
+  if (!r) return
+  const deltaSlots = Math.round((e.clientY - r.startY) / 30) // 每30px = 0.5小时
+  const target = events.value.find(ev => ev.id === r.eventId)
+  if (!target) return
+
+  if (r.mode === 'start') {
+    let newStart = r.origStart + deltaSlots * 0.5
+    newStart = Math.max(START_HOUR.value, Math.min(newStart, r.origEnd - 0.5))
+    if (newStart !== target.startTime) target.startTime = newStart
+  } else {
+    let newEnd = r.origEnd + deltaSlots * 0.5
+    newEnd = Math.max(r.origStart + 0.5, Math.min(newEnd, END_HOUR.value))
+    if (newEnd !== target.endTime) target.endTime = newEnd
+  }
+}
+
+const endResize = () => {
+  if (!resizing.value) return
+  resizing.value = null
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
 // 事件弹窗
 const showDialog = ref(false)
 const currentEvent = ref(null)
@@ -663,6 +705,10 @@ onMounted(() => {
   loadEvents()
   loadHolidayData()
 
+  // 事件时间拖拽调整
+  document.addEventListener('mousemove', onResizeMove)
+  document.addEventListener('mouseup', endResize)
+
   // 启动提醒检查
   startReminderCheck()
   
@@ -680,6 +726,8 @@ onMounted(() => {
   // 组件卸载时清理定时器
   onUnmounted(() => {
     stopReminderCheck()
+    document.removeEventListener('mousemove', onResizeMove)
+    document.removeEventListener('mouseup', endResize)
   })
 })
 
@@ -1023,9 +1071,16 @@ const debugWeekDaysCalculation = () => {
                 :style="{ ...event.style, background: getEventType(event.type).bgColor }"
                 @mousedown.stop="openEventDialog(event)"
               >
-                <span class="event-time">{{ formatTime(event.startTime) }}-{{ formatTime(event.endTime) }}</span>
-                <span class="event-title">{{ event.title }}</span>
-                <span class="event-type-tag">{{ getEventType(event.type).label }}</span>
+                <div class="resize-handle handle-top" title="拖拽调整开始时间" @mousedown.stop="startResize($event, event, 'start')"></div>
+                <div class="event-content">
+                  <span v-if="event.endTime - event.startTime >= 1" class="event-type-label">{{ getEventType(event.type).label }}</span>
+                  <div class="event-main">
+                    <span v-if="event.endTime - event.startTime >= 1" class="event-time-text">{{ formatTime(event.startTime) }} - {{ formatTime(event.endTime) }}（{{ event.endTime - event.startTime }}h）</span>
+                    <span class="event-title-line">{{ event.title }}</span>
+                    <div v-if="event.endTime - event.startTime >= 2 && event.description" class="event-desc-line">{{ event.description }}</div>
+                  </div>
+                </div>
+                <div class="resize-handle handle-bottom" title="拖拽调整结束时间" @mousedown.stop="startResize($event, event, 'end')"></div>
               </div>
             </el-tooltip>
           </div>
@@ -1626,20 +1681,20 @@ const debugWeekDaysCalculation = () => {
   position: absolute;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
-  padding: 4px 4px;
+  padding: 4px 5px 4px 8px;
   border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   display: flex;
-  align-items: center;
-  gap: 4px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
   min-width: 0;
   box-sizing: border-box;
+  border-left: 3px solid rgba(0, 0, 0, 0.22);
 }
 
 .event-item-absolute:hover {
@@ -1648,27 +1703,63 @@ const debugWeekDaysCalculation = () => {
   z-index: 10;
 }
 
-.event-type-tag {
-  font-size: 10px;
-  background: rgba(255, 255, 255, 0.2);
+/* 事件分层内容（≥1小时：左上角类型，时间+标题一行垂直居中；短事件仅标题） */
+.event-content {
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  height: 100%;
+}
+
+.event-type-label {
+  align-self: center;
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 600;
+  margin-top: 3px;
+  background: rgba(255, 255, 255, 0.22);
   padding: 1px 6px;
   border-radius: 8px;
-  white-space: nowrap;
+  line-height: 1.2;
 }
 
-.event-time {
-  font-size: 10px;
-  opacity: 0.9;
+.event-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.event-time-text {
   flex-shrink: 0;
+  font-size: 10px;
+  opacity: 0.92;
 }
 
-.event-title {
-  font-weight: 500;
+.event-title-line {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
   min-width: 0;
+}
+
+.event-desc-line {
+  font-size: 10px;
+  opacity: 0.75;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -2012,6 +2103,32 @@ const debugWeekDaysCalculation = () => {
   padding-top: 8px;
   border-top: 1px solid #e0e0e0;
 }
+
+/* 事件时间调整手柄 */
+.resize-handle {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  height: 6px;
+  cursor: ns-resize;
+  z-index: 5;
+}
+.resize-handle.handle-top { top: 0; }
+.resize-handle.handle-bottom { bottom: 0; }
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 2px;
+  width: 24px;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.8);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.resize-handle:hover::after { opacity: 1; }
 
 /* 单选框样式优化 */
 :deep(.el-radio-group) {
