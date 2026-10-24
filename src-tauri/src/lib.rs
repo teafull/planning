@@ -8,6 +8,7 @@ use thiserror::Error;
 use chrono::{Local, Datelike};
 
 mod db;
+mod raft;
 mod raft_cmd;
 
 // 自定义错误类型，方便前端处理
@@ -79,6 +80,7 @@ pub fn run() {
         if let Err(e) = db::init(app.handle()) {
             eprintln!("数据库初始化失败: {e}");
         }
+        app.manage(db::ClusterState::default());
 
         let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
         let about_i = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
@@ -154,7 +156,10 @@ pub fn run() {
             db::db_set_data_dir,
             db::db_get_node_id,
             db::db_get_cluster_config,
-            db::db_set_cluster_config
+            db::db_set_cluster_config,
+            db::cluster_create,
+            db::cluster_join,
+            db::cluster_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -271,29 +271,57 @@ pub fn db_get_events(db: tauri::State<Db>) -> Result<Vec<Value>, String> {
 }
 
 /// 全量保存(写路径改造后):
-/// diff(精确变更) → 按同步时间范围路由 → 命令 → 单事务 apply
-/// 无实际变更时不写库(不碰 updated_at, 为未来 LWW 语义做准备)
+/// diff(精确变更) → 按同步时间范围路由 → 命令 → 本地 apply 或 Raft 提议
+/// 无实际变更时不写库; 前端 API 不变
 #[tauri::command]
-pub fn db_save_events(db: tauri::State<Db>, events: Vec<Value>) -> Result<(), String> {
-    let mut conn = db.0.lock().unwrap();
+pub async fn db_save_events(
+    db: tauri::State<'_, Db>,
+    cluster: tauri::State<'_, ClusterState>,
+    events: Vec<Value>,
+) -> Result<(), String> {
+    // 同步段: diff + 路由 + 本地路径应用
+    let cluster_cmds = {
+        let mut conn = db.0.lock().unwrap();
+        let diff = diff_events(&conn, &events)?;
+        if diff.is_empty() {
+            return Ok(());
+        }
+        let routed = route_diff(&conn, &diff)?;
+        if routed.is_empty() {
+            return Ok(());
+        }
 
-    let diff = diff_events(&conn, &events)?;
-    if diff.is_empty() {
-        return Ok(()); // 无变更, 零写入
-    }
+        let raft_on = cluster.handle.try_lock().map(|g| g.is_some()).unwrap_or(true);
+        if !raft_on {
+            // 单机模式: 全部本地应用, 单事务(第 1 期行为)
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            for cmd in routed.iter_all() {
+                apply_command(&tx, cmd)?;
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+            return Ok(());
+        }
 
-    // 第 1 期(单机): cluster/local 两路都本地应用, 同一事务保证原子性
-    // 第 2 期(集群): cluster 路径改为 openraft propose
-    let routed = route_diff(&conn, &diff)?;
-    if routed.is_empty() {
-        return Ok(());
-    }
+        // 集群模式: local 路径立即本地应用
+        if !routed.local.is_empty() {
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            for cmd in &routed.local {
+                apply_command(&tx, cmd)?;
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+        }
+        routed.cluster
+    };
 
-    let tx = conn.transaction().map_err(|e| e.to_string())?;
-    for cmd in routed.iter_all() {
-        apply_command(&tx, cmd)?;
+    // 集群路径: 提议(本机 Leader 直写 / 转发)
+    if !cluster_cmds.is_empty() {
+        let guard = cluster.handle.lock().await;
+        let handle = guard.as_ref().ok_or("集群句柄缺失")?;
+        for cmd in &cluster_cmds {
+            ensure_proposed(handle, cmd).await?;
+        }
     }
-    tx.commit().map_err(|e| e.to_string())
+    Ok(())
 }
 
 // ---------- KV 表(设置/任务/笔记/绩效) ----------
@@ -356,4 +384,247 @@ pub fn db_set_cluster_config(
     let parsed: Value = serde_json::from_str(&value).map_err(|e| format!("非法 JSON: {e}"))?;
     let conn = db.0.lock().unwrap();
     apply_command(&conn, &RaftCommand::SetClusterConfig { value: parsed })
+}
+
+// ---------- 集群管理(Raft 第2期) ----------
+
+use crate::raft::RaftHandle;
+
+/// 集群运行状态(Tauri State 管理)
+#[derive(Default)]
+pub struct ClusterState {
+    pub handle: tokio::sync::Mutex<Option<std::sync::Arc<RaftHandle>>>,
+}
+
+/// 局域网 IP(UDP 探测, 不实际发包)
+fn lan_ip() -> String {
+    if let Ok(s) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if s.connect("8.8.8.8:80").is_ok() {
+            if let Ok(a) = s.local_addr() {
+                return a.ip().to_string();
+            }
+        }
+    }
+    "127.0.0.1".into()
+}
+
+fn gen_token() -> String {
+    let n = uuid::Uuid::new_v4().as_simple().to_string();
+    n.chars().take(6).collect::<String>().to_uppercase()
+}
+
+/// 命令提议: 先尝试本机写入, 非 Leader 时依据 ForwardToLeader 错误转发
+async fn ensure_proposed(handle: &std::sync::Arc<RaftHandle>, cmd: &RaftCommand) -> Result<(), String> {
+    let forward_addr = match handle.raft.client_write(cmd.clone()).await {
+        Ok(_) => return Ok(()),
+        Err(e) => {
+            let fl = e.forward_to_leader().ok_or_else(|| format!("写入失败: {e}"))?;
+            fl.leader_node
+                .as_ref()
+                .map(|n| n.addr.clone())
+                .ok_or("集群暂无 Leader, 稍后重试")?
+        }
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp: Value = client
+        .post(format!("http://{forward_addr}/cluster/propose"))
+        .json(&serde_json::json!({ "command": cmd }))
+        .send()
+        .await
+        .map_err(|e| format!("转发失败: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("解析失败: {e}"))?;
+    if resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(resp.get("msg").and_then(|v| v.as_str()).unwrap_or("转发失败").to_string())
+    }
+}
+
+/// 创建集群: 单节点初始化, 生成令牌, 启动 HTTP 服务
+#[tauri::command]
+pub async fn cluster_create(
+    db: tauri::State<'_, Db>,
+    cluster: tauri::State<'_, ClusterState>,
+    port: u16,
+    advertise: Option<String>,
+) -> Result<serde_json::Value, String> {
+    {
+        let g = cluster.handle.lock().await;
+        if g.is_some() {
+            return Err("集群已在本机运行".into());
+        }
+    }
+
+    let (db_path, data_dir) = {
+        let conn = db.0.lock().unwrap();
+        let p = conn.path().map(|s| s.to_string()).ok_or("无库路径")?;
+        let dir = std::path::Path::new(&p)
+            .parent()
+            .map(|d| d.to_path_buf())
+            .ok_or("无数据目录")?;
+        (std::path::PathBuf::from(p), dir)
+    };
+
+    let token = gen_token();
+    let addr = format!("{}:{port}", advertise.unwrap_or_else(lan_ip));
+
+    let handle = crate::raft::start_node(1, &db_path, data_dir.join("snapshots"), port, Some(token.clone())).await?;
+    let mut members = std::collections::BTreeMap::new();
+    members.insert(1u64, openraft::BasicNode { addr: addr.clone() });
+    handle
+        .raft
+        .initialize(members)
+        .await
+        .map_err(|e| format!("初始化失败: {e}"))?;
+
+    let handle_with_token = handle;
+    crate::raft::server::start_server(handle_with_token.clone()).await?;
+
+    // 持久化配置(保留已有 syncSince)
+    {
+        let conn = db.0.lock().unwrap();
+        let old: crate::raft::ClusterConfig = kv_get(&conn, "cluster.config")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        let cfg = crate::raft::ClusterConfig {
+            token: Some(token.clone()),
+            sync_since: old.sync_since,
+            listen_port: Some(port),
+            advertise_addr: Some(addr.clone()),
+            node_id: Some(1),
+        };
+        kv_upsert(&conn, "cluster.config", &serde_json::to_string(&cfg).map_err(|e| e.to_string())?)?;
+        kv_upsert(&conn, "node.raft_id", "1")?;
+    }
+
+    *cluster.handle.lock().await = Some(handle_with_token.clone());
+    Ok(serde_json::json!({ "token": token, "nodeId": 1, "addr": addr }))
+}
+
+/// 加入集群: 向目标节点登记, 本地作为 learner 启动并自动请求转正
+#[tauri::command]
+pub async fn cluster_join(
+    db: tauri::State<'_, Db>,
+    cluster: tauri::State<'_, ClusterState>,
+    target: String,
+    token: String,
+    port: u16,
+    advertise: Option<String>,
+) -> Result<serde_json::Value, String> {
+    {
+        let g = cluster.handle.lock().await;
+        if g.is_some() {
+            return Err("集群已在本机运行, 请先退出".into());
+        }
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // 1. 查询目标状态分配新 raft_id
+    let status: Value = client
+        .get(format!("http://{target}/cluster/status"))
+        .send()
+        .await
+        .map_err(|e| format!("无法连接 {target}: {e}"))?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    let max_id = status["membership"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|m| m["raftId"].as_u64()).max().unwrap_or(0))
+        .unwrap_or(0);
+    let my_id = max_id + 1;
+    let addr = format!("{}:{port}", advertise.unwrap_or_else(lan_ip));
+
+    // 2. 登记为目标 learner
+    let join_resp: Value = client
+        .post(format!("http://{target}/cluster/join"))
+        .json(&serde_json::json!({ "token": token, "raftId": my_id, "addr": addr }))
+        .send()
+        .await
+        .map_err(|e| format!("加入请求失败: {e}"))?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !join_resp["ok"].as_bool().unwrap_or(false) {
+        return Err(join_resp["msg"].as_str().unwrap_or("加入失败").to_string());
+    }
+
+    // 3. 本地启动(不 initialize, 由 leader 以 learner 身份同步)
+    let (db_path, data_dir) = {
+        let conn = db.0.lock().unwrap();
+        let p = conn.path().map(|s| s.to_string()).ok_or("无库路径")?;
+        let dir = std::path::Path::new(&p).parent().map(|d| d.to_path_buf()).ok_or("无数据目录")?;
+        (std::path::PathBuf::from(p), dir)
+    };
+    let handle = crate::raft::start_node(my_id, &db_path, data_dir.join("snapshots"), port, Some(token.clone())).await?;
+    crate::raft::server::start_server(handle.clone()).await?;
+
+    // 持久化
+    {
+        let conn = db.0.lock().unwrap();
+        let old: crate::raft::ClusterConfig = kv_get(&conn, "cluster.config")
+            .ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let cfg = crate::raft::ClusterConfig {
+            token: Some(token.clone()),
+            sync_since: old.sync_since,
+            listen_port: Some(port),
+            advertise_addr: Some(addr.clone()),
+            node_id: Some(my_id),
+        };
+        kv_upsert(&conn, "cluster.config", &serde_json::to_string(&cfg).map_err(|e| e.to_string())?)?;
+        kv_upsert(&conn, "node.raft_id", &my_id.to_string())?;
+    }
+    *cluster.handle.lock().await = Some(handle.clone());
+
+    // 4. 追平后自动请求转正(简化: 延迟后触发, 失败不影响数据同步)
+    let t = target.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let c = reqwest::Client::new();
+        let _ = c
+            .post(format!("http://{t}/cluster/promote"))
+            .json(&serde_json::json!({ "raftId": my_id }))
+            .send()
+            .await;
+    });
+
+    Ok(serde_json::json!({ "nodeId": my_id, "addr": addr }))
+}
+
+/// 集群状态(未启用时 enabled=false)
+#[tauri::command]
+pub async fn cluster_status(cluster: tauri::State<'_, ClusterState>) -> Result<serde_json::Value, String> {
+    let g = cluster.handle.lock().await;
+    match g.as_ref() {
+        None => Ok(serde_json::json!({ "enabled": false })),
+        Some(h) => {
+            let metrics = h.raft.metrics().borrow().clone();
+            let members: Vec<Value> = metrics
+                .membership_config
+                .nodes()
+                .map(|(id, n)| serde_json::json!({ "raftId": id, "addr": n.addr }))
+                .collect();
+            Ok(serde_json::json!({
+                "enabled": true,
+                "nodeId": h.node_id,
+                "state": format!("{:?}", metrics.state),
+                "currentLeader": metrics.current_leader,
+                "running": metrics.running_state.is_ok(),
+                "membership": members,
+                "lastApplied": metrics.last_applied.map(|l| l.index),
+                "lastLogIndex": metrics.last_log_index,
+            }))
+        }
+    }
 }
