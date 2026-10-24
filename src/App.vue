@@ -1,5 +1,8 @@
 <script setup>
 import { useRoute } from 'vue-router'
+import { initTheme } from './store/theme'
+
+initTheme()
 
 const route = useRoute()
 </script>
@@ -35,11 +38,9 @@ const route = useRoute()
   background: #f8fafc;
 }
 
-@media (prefers-color-scheme: dark) {
-  .app-layout {
+  html.dark .app-layout {
     background: #1a1a1a;
   }
-}
 
 
 .side-menu {
@@ -59,8 +60,7 @@ const route = useRoute()
   --el-menu-item-height: 44px;
 }
 
-@media (prefers-color-scheme: dark) {
-  .side-menu {
+  html.dark .side-menu {
     background: #1f2329;
     border-right-color: #3a3a3a;
     color: #fff;
@@ -69,7 +69,6 @@ const route = useRoute()
     --el-menu-active-color: #ffffff;
     --el-menu-hover-bg-color: rgba(255, 255, 255, 0.12);
   }
-}
 
 .side-menu__menu {
   border-right: none;

@@ -1,6 +1,11 @@
 <script setup>
 import { ElMessage } from 'element-plus'
 import { ref } from 'vue'
+
+// 构建时注入（见 vite.config.js define），单一来源 package.json
+const appVersion = __APP_VERSION__
+const buildDate = __BUILD_DATE__
+
 import {
   profile,
   preferences,
@@ -373,11 +378,11 @@ const handleDialogClose = (done) => {
         <div class="meta-list">
           <div class="meta-item">
             <span>当前版本</span>
-            <strong>v1.2.0</strong>
+            <strong>v{{ appVersion }}</strong>
           </div>
           <div class="meta-item">
             <span>最后更新</span>
-            <strong>2026-02-25</strong>
+            <strong>{{ buildDate }}</strong>
           </div>
           <div class="meta-item">
             <span>数据位置</span>
@@ -450,15 +455,14 @@ const handleDialogClose = (done) => {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
-@media (prefers-color-scheme: dark) {
-  .settings-header {
+  html.dark .settings-header {
     background: #2f2f2f;
     border-bottom-color: #3a3a3a;
     box-shadow: none;
   }
-  .settings-title { color: #e5e7eb; }
-  .settings-subtitle { color: #9ca3af; }
-  .settings-page {
+  html.dark .settings-title { color: #e5e7eb; }
+  html.dark .settings-subtitle { color: #9ca3af; }
+  html.dark .settings-page {
     --el-bg-color: #2f2f2f;
     --el-card-bg-color: #2f2f2f;
     --el-border-color-light: #3a3a3a;
@@ -468,7 +472,6 @@ const handleDialogClose = (done) => {
     --el-fill-color-blank: #2f2f2f;
     --el-fill-color-light: #3a3a3a;
   }
-}
 
 .settings-title {
   margin: 0 0 6px;

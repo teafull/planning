@@ -669,15 +669,14 @@ onUnmounted(() => {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
-@media (prefers-color-scheme: dark) {
-  .tools-header {
+  html.dark .tools-header {
     background: #2f2f2f;
     border-bottom-color: #3a3a3a;
     box-shadow: none;
   }
-  .tools-title { color: #e5e7eb; }
-  .tools-subtitle { color: #9ca3af; }
-  .tools-page {
+  html.dark .tools-title { color: #e5e7eb; }
+  html.dark .tools-subtitle { color: #9ca3af; }
+  html.dark .tools-page {
     --el-bg-color: #2f2f2f;
     --el-card-bg-color: #2f2f2f;
     --el-border-color-light: #3a3a3a;
@@ -687,7 +686,6 @@ onUnmounted(() => {
     --el-fill-color-blank: #2f2f2f;
     --el-fill-color-light: #3a3a3a;
   }
-}
 
 .tools-title {
   margin: 0 0 6px;

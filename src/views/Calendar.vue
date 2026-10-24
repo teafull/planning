@@ -2098,183 +2098,181 @@ const debugWeekDaysCalculation = () => {
   max-width: 100%;
 }
 
-@media (prefers-color-scheme: dark) {
-  .calendar-app {
+  html.dark .calendar-app {
     background: #1a1a1a;
   }
 
-  .calendar-header,
-  .calendar-container {
+  html.dark .calendar-header,
+  html.dark .calendar-container {
     background: #2f2f2f;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   }
 
-  .week-header {
+  html.dark .week-header {
     background: #1f1f1f;
     border-color: #3a3a3a;
   }
 
-  .day-header {
+  html.dark .day-header {
     border-color: #3a3a3a;
   }
 
-  .day-name {
+  html.dark .day-name {
     color: #999;
   }
 
-  .day-date {
+  html.dark .day-date {
     color: #e0e0e0;
   }
 
-  .day-header.today {
+  html.dark .day-header.today {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   }
 
-  .day-header.weekend {
+  html.dark .day-header.weekend {
     background: #3d1f1f;
   }
 
-  .day-header.weekend .day-name {
+  html.dark .day-header.weekend .day-name {
     color: #fc8181;
   }
 
-  .rest-tag {
+  html.dark .rest-tag {
     color: #fc8181;
     background: #742a2a;
   }
 
-  .current-month {
+  html.dark .current-month {
     color: #e0e0e0;
   }
 
-  .time-column {
+  html.dark .time-column {
     border-color: #3a3a3a;
   }
 
-  .calendar-grid-wrapper {
+  html.dark .calendar-grid-wrapper {
     border-color: #3a3a3a;
   }
 
-  .time-label {
+  html.dark .time-label {
     color: #666;
     border-color: #2a2a2a;
   }
 
-  .day-column {
+  html.dark .day-column {
     border-color: #3a3a3a;
   }
 
-  .time-slot {
+  html.dark .time-slot {
     border-color: #2a2a2a;
   }
 
-  .time-slot:hover {
+  html.dark .time-slot:hover {
     background: #0a3d1f;
   }
 
-  .time-slot.is-workday {
+  html.dark .time-slot.is-workday {
     background: rgba(16, 185, 129, 0.03);
     border-color: rgba(16, 185, 129, 0.1);
   }
 
-  .time-slot.is-workday:hover {
+  html.dark .time-slot.is-workday:hover {
     background: rgba(16, 185, 129, 0.08);
   }
 
-  .event-list-header {
+  html.dark .event-list-header {
     border-color: #3a3a3a;
     background: #1f1f1f;
     color: #e0e0e0;
   }
 
-  .event-list {
+  html.dark .event-list {
     background: #1f1f1f;
     border-color: #3a3a3a;
   }
 
-  .event-list-item {
+  html.dark .event-list-item {
     background: #2f2f2f;
     border-left-color: #667eea;
   }
 
-  .event-list-item:hover {
+  html.dark .event-list-item:hover {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   }
 
-  .event-delete-btn {
+  html.dark .event-delete-btn {
     background: #f56565;
   }
 
-  .event-delete-btn:hover {
+  html.dark .event-delete-btn:hover {
     background: #e53e3e;
   }
 
-  .event-item-header {
+  html.dark .event-item-header {
     color: #999;
   }
 
-  .event-item-type {
+  html.dark .event-item-type {
     opacity: 0.9;
   }
 
-  .event-item-time {
+  html.dark .event-item-time {
     color: #667eea;
   }
 
-  .event-item-title {
+  html.dark .event-item-title {
     color: #e0e0e0;
   }
 
-  .event-item-description {
+  html.dark .event-item-description {
     color: #999;
   }
 
-  .no-events {
+  html.dark .no-events {
     color: #666;
   }
 
   /* 全天事件区域深色模式 */
-  .all-day-events-section {
+  html.dark .all-day-events-section {
     background: #1f1f1f;
     border-color: #3a3a3a;
   }
 
-  .all-day-time-header {
+  html.dark .all-day-time-header {
     border-color: #3a3a3a;
   }
 
-  .all-day-days-container {
+  html.dark .all-day-days-container {
     border-color: #3a3a3a;
   }
 
-  .all-day-label {
+  html.dark .all-day-label {
     color: #666;
   }
 
-  .all-day-events-row {
+  html.dark .all-day-events-row {
     border-color: #2a2a2a;
   }
 
-  .all-day-day-cell {
+  html.dark .all-day-day-cell {
     border-color: #2a2a2a;
   }
 
-  .all-day-day-cell:hover {
+  html.dark .all-day-day-cell:hover {
     background: #0a3d1f;
   }
 
-  .all-day-day-cell.today {
+  html.dark .all-day-day-cell.today {
     background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%);
   }
 
-  .all-day-day-cell.weekend {
+  html.dark .all-day-day-cell.weekend {
     background: rgba(245, 101, 101, 0.1);
   }
 
-  .all-day-event-list-placeholder {
+  html.dark .all-day-event-list-placeholder {
     border-color: #3a3a3a;
   }
-}
 
 /* 全天事件区域 */
 .all-day-events-section {
@@ -2552,11 +2550,9 @@ body.dragging-copy .event-item-absolute { pointer-events: none; }
 }
 .allday-resize-handle:hover::after { opacity: 1; }
 
-@media (prefers-color-scheme: dark) {
-  .ctx-menu { background: #2f2f2f; border-color: #3a3a3a; color: #ddd; }
-  .ctx-item:hover { background: #3a3a3a; color: #7aa7ff; }
-  .ctx-sep { background: #3a3a3a; }
-}
+  html.dark .ctx-menu { background: #2f2f2f; border-color: #3a3a3a; color: #ddd; }
+  html.dark .ctx-item:hover { background: #3a3a3a; color: #7aa7ff; }
+  html.dark .ctx-sep { background: #3a3a3a; }
 
 /* 单选框样式优化 */
 :deep(.el-radio-group) {

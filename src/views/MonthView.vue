@@ -891,10 +891,57 @@ onUnmounted(() => {
 .ctx-item.ctx-disabled { color: #bbb; cursor: not-allowed; }
 .ctx-item.ctx-disabled:hover { background: transparent; color: #bbb; }
 
-@media (prefers-color-scheme: dark) {
-  .ctx-menu { background: #2f2f2f; border-color: #3a3a3a; color: #ddd; }
-  .ctx-item:hover { background: #3a3a3a; color: #7aa7ff; }
+  html.dark .ctx-menu { background: #2f2f2f; border-color: #3a3a3a; color: #ddd; }
+  html.dark .ctx-item:hover { background: #3a3a3a; color: #7aa7ff; }
+
+/* 深色主题：页面/头部/网格 */
+html.dark .month-view { background: #1a1a1a; }
+html.dark .month-header {
+  background: #2f2f2f;
+  border-bottom-color: #3a3a3a;
+  box-shadow: none;
 }
+html.dark .current-month h2 { color: #e5e7eb; }
+
+/* 月份统计胶囊 */
+html.dark .month-stats {
+  background: linear-gradient(135deg, #262626 0%, #2f2f2f 100%);
+  border-color: #3a3a3a;
+}
+html.dark .month-stats .stats-label { color: #9ca3af; }
+html.dark .month-stats .stats-value { color: #e5e7eb; }
+
+/* 日历网格：表头/格子/间隙 */
+html.dark .weekday { background: #232323; color: #9ca3af; }
+html.dark .calendar-grid { background: #3a3a3a; gap: 1px; }
+html.dark .calendar-day { background: #2f2f2f; }
+html.dark .calendar-day.today { background: rgba(59, 130, 246, 0.15); }
+html.dark .calendar-day.other-month { background: #232323; }
+html.dark .day-number { color: #e5e7eb; }
+html.dark .calendar-day.other-month .day-number { color: #6b7280; }
+html.dark .more-events { color: #9ca3af; background: #3a3a3a; }
+
+/* 右侧栏：当日事件列表 */
+html.dark .month-events-sidebar {
+  background: #2f2f2f;
+  box-shadow: none;
+}
+html.dark .sidebar-header {
+  background: #232323;
+  border-bottom-color: #3a3a3a;
+}
+html.dark .sidebar-header h3 { color: #e5e7eb; }
+html.dark .event-item { background: #262626; }
+html.dark .event-title { color: #e5e7eb; }
+html.dark .no-events { color: #9ca3af; }
+
+/* 月度事件列表(侧栏)与次要文字 */
+html.dark .month-event-item { background: #262626; }
+html.dark .event-time { color: #9ca3af; }
+html.dark .event-description { color: #9ca3af; }
+
+/* 抽屉选中日详情 */
+html.dark .selected-date h3 { color: #e5e7eb; }
 
 .month-view {
   display: flex;

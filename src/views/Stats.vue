@@ -551,15 +551,14 @@ const copyWeeklyReport = async () => {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
-@media (prefers-color-scheme: dark) {
-  .stats-header {
+  html.dark .stats-header {
     background: #2f2f2f;
     border-bottom-color: #3a3a3a;
     box-shadow: none;
   }
-  .stats-title { color: #e5e7eb; }
-  .stats-subtitle { color: #9ca3af; }
-  .stats-page {
+  html.dark .stats-title { color: #e5e7eb; }
+  html.dark .stats-subtitle { color: #9ca3af; }
+  html.dark .stats-page {
     --el-bg-color: #2f2f2f;
     --el-card-bg-color: #2f2f2f;
     --el-border-color-light: #3a3a3a;
@@ -569,7 +568,6 @@ const copyWeeklyReport = async () => {
     --el-fill-color-blank: #2f2f2f;
     --el-fill-color-light: #3a3a3a;
   }
-}
 
 .stats-title {
   margin: 0 0 6px;
