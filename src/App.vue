@@ -1,10 +1,18 @@
 <script setup>
 import { useRoute } from 'vue-router'
+import { Calendar, Grid, Tickets, DataAnalysis, Setting } from '@element-plus/icons-vue'
 import { initTheme } from './store/theme'
 
 initTheme()
 
 const route = useRoute()
+
+const menuItems = [
+  { index: '/calendar', label: '日历', icon: Calendar },
+  { index: '/month', label: '月历', icon: Grid },
+  { index: '/tasks', label: '任务', icon: Tickets },
+  { index: '/stats', label: '统计', icon: DataAnalysis }
+]
 </script>
 
 <template>
@@ -15,13 +23,16 @@ const route = useRoute()
         :default-active="route.path"
         router
       >
-        <el-menu-item index="/calendar">日历</el-menu-item>
-        <el-menu-item index="/month">月历</el-menu-item>
-        <el-menu-item index="/tasks">任务</el-menu-item>
-        <el-menu-item index="/stats">统计</el-menu-item>
+        <el-menu-item v-for="item in menuItems" :key="item.index" :index="item.index">
+          <el-icon><component :is="item.icon" /></el-icon>
+          <span>{{ item.label }}</span>
+        </el-menu-item>
         <!-- <el-menu-item index="/performance">绩效</el-menu-item>
         <el-menu-item index="/ai-chat">AI助手</el-menu-item> -->
-        <el-menu-item index="/settings" class="side-menu__bottom-item">设置</el-menu-item>
+        <el-menu-item index="/settings" class="side-menu__bottom-item">
+          <el-icon><Setting /></el-icon>
+          <span>设置</span>
+        </el-menu-item>
       </el-menu>
 
     </aside>
@@ -57,7 +68,21 @@ const route = useRoute()
   --el-menu-text-color: #4b5563;
   --el-menu-active-color: #4f46e5;
   --el-menu-hover-bg-color: #f1f5f9;
-  --el-menu-item-height: 44px;
+  --el-menu-item-height: 46px;
+  --el-menu-base-level-padding: 10px;
+}
+
+.side-menu__menu :deep(.el-menu-item) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.side-menu__menu :deep(.el-menu-item .el-icon) {
+  font-size: 16px;
+  margin-right: 0;
 }
 
   html.dark .side-menu {
