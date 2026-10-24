@@ -3,6 +3,7 @@
 //   planning.db        主库(WAL 模式)
 //   backups/           启动快照备份(保留 20 份)
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -13,6 +14,55 @@ use tauri::{AppHandle, Manager};
 
 pub struct Db(pub Mutex<Connection>);
 
+// ---------- 数据目录配置(固定位置存指针, 目录本身可换) ----------
+
+#[derive(Default, Serialize, Deserialize)]
+struct ConfigFile {
+    #[serde(rename = "dataDir", default)]
+    data_dir: Option<String>,
+}
+
+fn config_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("config.json"))
+}
+
+fn read_config(app: &AppHandle) -> ConfigFile {
+    config_file_path(app)
+        .ok()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn write_config(app: &AppHandle, cfg: &ConfigFile) -> Result<(), String> {
+    let p = config_file_path(app)?;
+    let s = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    fs::write(p, s).map_err(|e| e.to_string())
+}
+
+fn default_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .document_dir()
+        .map_err(|_| "无法定位文档目录".to_string())?;
+    Ok(base.join("planning"))
+}
+
+/// 解析当前生效目录: 配置优先, 配置不可用时回退默认目录
+fn resolve_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let cfg = read_config(app);
+    if let Some(dir) = cfg.data_dir {
+        let p = PathBuf::from(&dir);
+        if fs::create_dir_all(&p).is_ok() {
+            return Ok(p);
+        }
+        eprintln!("配置的数据目录不可用, 回退默认: {dir}");
+    }
+    default_data_dir(app)
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -21,11 +71,7 @@ fn now_ms() -> i64 {
 }
 
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let base = app
-        .path()
-        .document_dir()
-        .map_err(|_| "无法定位文档目录".to_string())?;
-    Ok(base.join("planning"))
+    resolve_data_dir(app)
 }
 
 /// 初始化数据库: 建目录、开库、WAL、建表、启动备份
@@ -95,6 +141,79 @@ fn backup_snapshot(conn: &Connection) -> Result<String, String> {
 pub fn db_backup(db: tauri::State<Db>) -> Result<String, String> {
     let conn = db.0.lock().unwrap();
     backup_snapshot(&conn)
+}
+
+// ---------- 数据目录管理 ----------
+
+#[tauri::command]
+pub fn db_get_data_dir(app: AppHandle) -> Result<String, String> {
+    Ok(resolve_data_dir(&app)?.to_string_lossy().to_string())
+}
+
+fn is_cloud_path(p: &str) -> bool {
+    let s = p.to_lowercase();
+    s.contains("onedrive")
+        || s.contains("dropbox")
+        || s.contains("google drive")
+        || s.contains("google\\drive")
+        || s.contains("nutstore")
+        || s.contains("坚果云")
+        || s.contains("mobile documents")
+}
+
+/// 切换数据目录: checkpoint→快照→复制→完整性校验→写配置→热切换连接
+/// 原目录文件保留作备份, 失败时无副作用
+#[tauri::command]
+pub fn db_set_data_dir(
+    app: AppHandle,
+    db: tauri::State<Db>,
+    new_dir: String,
+) -> Result<String, String> {
+    let new_path = PathBuf::from(&new_dir);
+    if !new_path.is_absolute() {
+        return Err("请提供绝对路径".into());
+    }
+    fs::create_dir_all(&new_path).map_err(|e| format!("无法创建目录: {e}"))?;
+    let new_db = new_path.join("planning.db");
+    if new_db.exists() {
+        return Err("目标目录已存在 planning.db，为避免覆盖请选择空目录".into());
+    }
+
+    // 1. 合并 WAL 到主库 + 旧目录落一份快照(安全网)
+    let old_db_path = {
+        let conn = db.0.lock().unwrap();
+        let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        let _ = backup_snapshot(&conn);
+        conn.path()
+            .map(|s| PathBuf::from(s))
+            .ok_or("无法获取当前库路径")?
+    };
+
+    // 2. 复制到新目录
+    fs::copy(&old_db_path, &new_db).map_err(|e| format!("复制数据库失败: {e}"))?;
+
+    // 3. 打开新库并做完整性校验, 失败则清理退出
+    let conn = Connection::open(&new_db).map_err(|e| e.to_string())?;
+    let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    let check: String = conn
+        .query_row("PRAGMA quick_check", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if check != "ok" {
+        let _ = fs::remove_file(&new_db);
+        return Err("新目录数据库完整性校验失败，已取消切换".into());
+    }
+
+    // 4. 写入配置指针(此后解析指向新目录)
+    write_config(&app, &ConfigFile { data_dir: Some(new_dir.clone()) })?;
+
+    // 5. 热切换连接, 无需重启
+    *db.0.lock().unwrap() = conn;
+
+    if is_cloud_path(&new_dir) {
+        Ok("目录已切换。⚠️ 该目录位于云盘同步范围内，网盘同步 SQLite 文件可能导致数据损坏，建议在网盘设置中排除 planning 子目录".to_string())
+    } else {
+        Ok(format!("目录已切换至 {new_dir}（原目录数据保留作备份）"))
+    }
 }
 
 // ---------- 事件表 ----------

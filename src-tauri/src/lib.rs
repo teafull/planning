@@ -139,6 +139,7 @@ pub fn run() {
     })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             greet,
             http_get,
@@ -147,7 +148,9 @@ pub fn run() {
             db::db_get_kv,
             db::db_set_kv,
             db::db_set_kv_multi,
-            db::db_backup
+            db::db_backup,
+            db::db_get_data_dir,
+            db::db_set_data_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

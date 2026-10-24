@@ -1,10 +1,57 @@
 <script setup>
-import { ElMessage } from 'element-plus'
-import { ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, onMounted } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { openPath } from '@tauri-apps/plugin-opener'
 
 // 构建时注入（见 vite.config.js define），单一来源 package.json
 const appVersion = __APP_VERSION__
 const buildDate = __BUILD_DATE__
+
+// ---------- 数据目录管理 ----------
+const dataDir = ref('')
+
+const loadDataDir = async () => {
+  try {
+    dataDir.value = await invoke('db_get_data_dir')
+  } catch (e) {
+    console.error('获取数据目录失败:', e)
+  }
+}
+
+const openDataDir = () => {
+  if (!dataDir.value) return
+  openPath(dataDir.value).catch(e => {
+    console.error('打开目录失败:', e)
+    ElMessage.error(`打开目录失败: ${typeof e === 'string' ? e : e?.message || e}`)
+  })
+}
+
+const changeDataDir = async () => {
+  try {
+    const selected = await openDialog({ directory: true, title: '选择新的数据目录' })
+    if (!selected) return
+    const confirm = await ElMessageBox.confirm(
+      `将把全部数据迁移到：\n${selected}\n\n原目录文件保留作备份，是否继续？`,
+      '切换数据目录',
+      { confirmButtonText: '迁移', cancelButtonText: '取消', type: 'warning' }
+    ).catch(() => null)
+    if (!confirm) return
+
+    const result = await invoke('db_set_data_dir', { newDir: selected })
+    dataDir.value = selected
+    if (result && (result.includes('⚠️') || result.includes('云盘'))) {
+      ElMessageBox.alert(result, '目录已切换', { type: 'warning', confirmButtonText: '知道了' })
+    } else {
+      ElMessage.success(result || '目录已切换')
+    }
+  } catch (e) {
+    ElMessage.error(typeof e === 'string' ? e : String(e))
+  }
+}
+
+onMounted(loadDataDir)
 
 import {
   profile,
@@ -368,6 +415,13 @@ const handleDialogClose = (done) => {
               <el-option label="每月" value="monthly" />
             </el-select>
           </el-form-item>
+          <el-form-item label="数据目录">
+            <div class="data-dir-row">
+              <span class="data-dir-path" :title="dataDir">{{ dataDir || '获取中…' }}</span>
+              <el-button size="small" @click="openDataDir">打开</el-button>
+              <el-button size="small" type="primary" @click="changeDataDir">更改…</el-button>
+            </div>
+          </el-form-item>
         </el-form>
       </el-card>
 
@@ -386,7 +440,7 @@ const handleDialogClose = (done) => {
           </div>
           <div class="meta-item">
             <span>数据位置</span>
-            <strong>本地存储</strong>
+            <strong :title="dataDir">{{ dataDir || '本地 SQLite' }}</strong>
           </div>
         </div>
       </el-card>
@@ -460,6 +514,26 @@ const handleDialogClose = (done) => {
     border-bottom-color: #3a3a3a;
     box-shadow: none;
   }
+
+.data-dir-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.data-dir-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  color: #6b7280;
+  font-size: 13px;
+}
   html.dark .settings-title { color: #e5e7eb; }
   html.dark .settings-subtitle { color: #9ca3af; }
   html.dark .settings-page {
