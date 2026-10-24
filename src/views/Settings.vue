@@ -1,6 +1,6 @@
 <script setup>
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { openPath } from '@tauri-apps/plugin-opener'
@@ -52,6 +52,126 @@ const changeDataDir = async () => {
 }
 
 onMounted(loadDataDir)
+
+// ---------- 集群同步 ----------
+const clusterStatus = ref({ enabled: false, offline: false, pending: 0 })
+const clusterPort = ref(7878)
+const joinTarget = ref('')
+const joinToken = ref('')
+const syncSince = ref(null)
+let statusTimer = null
+
+const loadClusterStatus = async () => {
+  try {
+    clusterStatus.value = await invoke('cluster_status')
+  } catch (e) {
+    console.error('集群状态获取失败:', e)
+  }
+}
+
+const loadSyncSince = async () => {
+  try {
+    const raw = await invoke('db_get_cluster_config')
+    if (raw) syncSince.value = JSON.parse(raw).syncSince || null
+  } catch {}
+}
+
+const createCluster = async () => {
+  try {
+    const res = await invoke('cluster_create', { port: clusterPort.value })
+    await ElMessageBox.alert(
+      `集群已创建\n\n集群令牌：${res.token}\n本机地址：${res.addr}\n\n其他设备在设置页「加入集群」填入本机地址与令牌即可`,
+      '创建成功',
+      { confirmButtonText: '好的' }
+    )
+    loadClusterStatus()
+  } catch (e) {
+    ElMessage.error(String(e))
+  }
+}
+
+const joinCluster = async () => {
+  if (!joinTarget.value.trim() || !joinToken.value.trim()) {
+    ElMessage.warning('请填写节点地址与集群令牌')
+    return
+  }
+  try {
+    const res = await invoke('cluster_join', {
+      target: joinTarget.value.trim(),
+      token: joinToken.value.trim(),
+      port: clusterPort.value
+    })
+    ElMessage.success(`已加入集群，本机为节点 #${res.nodeId}，数据同步中…`)
+    loadClusterStatus()
+  } catch (e) {
+    ElMessage.error(String(e))
+  }
+}
+
+const leaveCluster = async () => {
+  const ok = await ElMessageBox.confirm('退出后本机回到单机模式，数据保留不受影响', '退出集群', {
+    type: 'warning', confirmButtonText: '退出', cancelButtonText: '取消'
+  }).catch(() => null)
+  if (!ok) return
+  try {
+    await invoke('cluster_leave')
+    ElMessage.success('已退出集群')
+    loadClusterStatus()
+  } catch (e) {
+    ElMessage.error(String(e))
+  }
+}
+
+const removeMember = async (id) => {
+  const ok = await ElMessageBox.confirm(`移除节点 #${id}？该设备将不再同步数据`, '移除成员', {
+    type: 'warning', confirmButtonText: '移除', cancelButtonText: '取消'
+  }).catch(() => null)
+  if (!ok) return
+  try {
+    await invoke('cluster_remove', { raftId: id })
+    loadClusterStatus()
+  } catch (e) {
+    ElMessage.error(String(e))
+  }
+}
+
+const setOffline = async (v) => {
+  try {
+    await invoke('cluster_set_offline', { enabled: v })
+    loadClusterStatus()
+  } catch (e) {
+    ElMessage.error(String(e))
+  }
+}
+
+const flushPending = async () => {
+  try {
+    const r = await invoke('cluster_flush_pending')
+    ElMessage.success(`已重放 ${r.replayed} 条积压命令`)
+    loadClusterStatus()
+  } catch (e) {
+    ElMessage.error(String(e))
+  }
+}
+
+const saveSyncSince = async () => {
+  try {
+    const raw = await invoke('db_get_cluster_config')
+    const cfg = raw ? JSON.parse(raw) : {}
+    cfg.syncSince = syncSince.value || ''
+    await invoke('db_set_cluster_config', { value: JSON.stringify(cfg) })
+    ElMessage.success('同步范围已保存（新事件按新范围同步，历史不回灌）')
+  } catch (e) {
+    ElMessage.error(String(e))
+  }
+}
+
+onMounted(() => {
+  loadClusterStatus()
+  loadSyncSince()
+  statusTimer = setInterval(loadClusterStatus, 3000)
+})
+onUnmounted(() => clearInterval(statusTimer))
 
 import {
   profile,
@@ -427,6 +547,69 @@ const handleDialogClose = (done) => {
 
       <el-card class="settings-card settings-card--wide" shadow="never">
         <template #header>
+          <div class="card-title">集群同步<span class="card-sub">局域网多设备数据同步（Raft 共识，无需云服务）</span></div>
+        </template>
+
+        <!-- 未启用: 创建/加入 -->
+        <div v-if="!clusterStatus.enabled" class="cluster-panel">
+          <el-alert type="info" :closable="false" title="当前为单机模式"
+            description="开启后，同一局域网内的多台设备可自动同步日历与任务数据。建议 3 台及以上设备组队（至少 2 台常开），否则离线时需开启离线模式。" />
+          <div class="cluster-actions-row" style="margin-top: 14px">
+            <el-input-number v-model="clusterPort" :min="1024" :max="65535" :controls="false" style="width: 110px" />
+            <el-button type="primary" @click="createCluster">创建集群</el-button>
+            <el-divider direction="vertical" />
+            <el-input v-model="joinTarget" placeholder="Leader 节点 IP:端口" style="width: 200px" />
+            <el-input v-model="joinToken" placeholder="集群令牌" style="width: 130px" maxlength="6" />
+            <el-button @click="joinCluster">加入集群</el-button>
+          </div>
+        </div>
+
+        <!-- 已启用: 状态面板 -->
+        <div v-else class="cluster-panel">
+          <div class="cluster-meta">
+            <span>本节点 <b>#{{ clusterStatus.nodeId }}</b></span>
+            <span>角色
+              <el-tag size="small" :type="clusterStatus.state === 'Leader' ? 'success' : 'info'">
+                {{ clusterStatus.state }}
+              </el-tag>
+            </span>
+            <span>Leader <b>#{{ clusterStatus.currentLeader ?? '选举中…' }}</b></span>
+            <span>已应用 <b>{{ clusterStatus.lastApplied ?? '-' }}</b></span>
+          </div>
+
+          <div class="cluster-members">
+            <div v-for="m in (clusterStatus.membership || [])" :key="m.raftId" class="cluster-member">
+              <span class="member-id">#{{ m.raftId }}</span>
+              <span class="member-addr">{{ m.addr }}</span>
+              <el-tag v-if="m.raftId === clusterStatus.nodeId" size="small">本机</el-tag>
+              <el-tag v-if="m.raftId === clusterStatus.currentLeader" size="small" type="success">Leader</el-tag>
+              <el-button v-if="m.raftId !== clusterStatus.nodeId" size="small" type="danger" text @click="removeMember(m.raftId)">移除</el-button>
+            </div>
+          </div>
+
+          <div class="cluster-actions-row">
+            <span>离线模式</span>
+            <el-switch :model-value="clusterStatus.offline" @change="setOffline" />
+            <template v-if="clusterStatus.pending > 0">
+              <span class="pending-info">待同步 {{ clusterStatus.pending }} 条</span>
+              <el-button size="small" type="primary" plain @click="flushPending">立即同步</el-button>
+            </template>
+            <span v-else class="sync-ok">● 已同步</span>
+            <el-button type="danger" plain @click="leaveCluster">退出集群</el-button>
+          </div>
+        </div>
+
+        <!-- 同步范围(两种模式通用) -->
+        <div class="sync-since-row">
+          <span>同步起始日期</span>
+          <el-date-picker v-model="syncSince" type="date" value-format="YYYY-MM-DD" placeholder="全部同步" clearable style="width: 160px" />
+          <el-button size="small" @click="saveSyncSince">保存</el-button>
+          <span class="tip">仅同步此日期之后的事件</span>
+        </div>
+      </el-card>
+
+      <el-card class="settings-card settings-card--wide" shadow="never">
+        <template #header>
           <div class="card-title">版本信息</div>
         </template>
         <div class="meta-list">
@@ -534,6 +717,96 @@ const handleDialogClose = (done) => {
   color: #6b7280;
   font-size: 13px;
 }
+
+/* 集群同步卡片 */
+.card-sub {
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: normal;
+  color: #9ca3af;
+}
+
+.cluster-panel {
+  margin-bottom: 16px;
+}
+
+.cluster-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.cluster-meta {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.cluster-meta b {
+  color: #1f2937;
+}
+
+.cluster-members {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 10px;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+
+.cluster-member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.member-id {
+  width: 34px;
+  color: #6b7280;
+}
+
+.member-addr {
+  flex: 1;
+  color: #374151;
+  font-family: monospace;
+}
+
+.pending-info {
+  color: #d97706;
+  font-size: 13px;
+}
+
+.sync-ok {
+  color: #10b981;
+  font-size: 13px;
+}
+
+.sync-since-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #374151;
+  padding-top: 12px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.sync-since-row .tip {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+html.dark .cluster-meta b { color: #e5e7eb; }
+html.dark .member-addr { color: #d1d5db; }
+html.dark .cluster-members { background: #262626; }
+html.dark .sync-since-row { border-top-color: #333; }
   html.dark .settings-title { color: #e5e7eb; }
   html.dark .settings-subtitle { color: #9ca3af; }
   html.dark .settings-page {
