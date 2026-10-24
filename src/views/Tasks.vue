@@ -8,11 +8,15 @@ const eventTypes = [
   { value: 'meeting', label: '会议', color: '#48bb78', bgColor: 'linear-gradient(135deg, #48bb78 0%, #38a169 100%)' },
   { value: 'issue', label: '问题', color: '#f56565', bgColor: 'linear-gradient(135deg, #f56565 0%, #e53e3e 100%)' },
   { value: 'reminder', label: '提醒', color: '#ed8936', bgColor: 'linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)' },
+  { value: 'deadline', label: '截止期限', color: '#c53030', bgColor: 'linear-gradient(135deg, #c53030 0%, #822727 100%)' },
+  { value: 'study', label: '学习/培训', color: '#3182ce', bgColor: 'linear-gradient(135deg, #3182ce 0%, #2b6cb0 100%)' },
+  { value: 'trip', label: '出差/外出', color: '#805ad5', bgColor: 'linear-gradient(135deg, #805ad5 0%, #6b46c1 100%)' },
+  { value: 'vacation', label: '请假/休息', color: '#38b2ac', bgColor: 'linear-gradient(135deg, #38b2ac 0%, #2c7a7b 100%)' },
   { value: 'other', label: '其他', color: '#718096', bgColor: 'linear-gradient(135deg, #718096 0%, #4a5568 100%)' }
 ]
 
 const getEventType = (type) => {
-  return eventTypes.find(item => item.value === type) || eventTypes[4]
+  return eventTypes.find(item => item.value === type) || eventTypes.find(item => item.value === 'other')
 }
 
 const presets = [

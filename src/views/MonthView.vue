@@ -479,6 +479,10 @@ const eventTypes = [
   { value: 'meeting', label: '会议', color: '#48bb78' },
   { value: 'issue', label: '问题', color: '#f56565' },
   { value: 'reminder', label: '提醒', color: '#ed8936' },
+  { value: 'deadline', label: '截止期限', color: '#c53030' },
+  { value: 'study', label: '学习/培训', color: '#3182ce' },
+  { value: 'trip', label: '出差/外出', color: '#805ad5' },
+  { value: 'vacation', label: '请假/休息', color: '#38b2ac' },
   { value: 'other', label: '其他', color: '#718096' }
 ]
 

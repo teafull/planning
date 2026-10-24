@@ -89,12 +89,16 @@ const eventTypes = [
   { value: 'meeting', label: '会议', color: '#48bb78', bgColor: 'linear-gradient(135deg, #48bb78 0%, #38a169 100%)' },
   { value: 'issue', label: '问题', color: '#f56565', bgColor: 'linear-gradient(135deg, #f56565 0%, #e53e3e 100%)' },
   { value: 'reminder', label: '提醒', color: '#ed8936', bgColor: 'linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)' },
+  { value: 'deadline', label: '截止期限', color: '#c53030', bgColor: 'linear-gradient(135deg, #c53030 0%, #822727 100%)' },
+  { value: 'study', label: '学习/培训', color: '#3182ce', bgColor: 'linear-gradient(135deg, #3182ce 0%, #2b6cb0 100%)' },
+  { value: 'trip', label: '出差/外出', color: '#805ad5', bgColor: 'linear-gradient(135deg, #805ad5 0%, #6b46c1 100%)' },
+  { value: 'vacation', label: '请假/休息', color: '#38b2ac', bgColor: 'linear-gradient(135deg, #38b2ac 0%, #2c7a7b 100%)' },
   { value: 'other', label: '其他', color: '#718096', bgColor: 'linear-gradient(135deg, #718096 0%, #4a5568 100%)' }
 ]
 
 // 获取事件类型配置
 const getEventType = (type) => {
-  return eventTypes.find(t => t.value === type) || eventTypes[4] // 默认返回"其他"
+  return eventTypes.find(t => t.value === type) || eventTypes.find(t => t.value === 'other') // 默认返回"其他"
 }
 
 // 当前周的开始日期
@@ -1068,7 +1072,7 @@ const debugWeekDaysCalculation = () => {
         <el-form-item label="事件类型">
           <el-radio-group v-model="form.type">
             <el-radio v-for="type in eventTypes" :key="type.value" :value="type.value">
-              {{ type.label }}
+              <span :style="{ color: type.color, fontWeight: 500 }">● {{ type.label }}</span>
             </el-radio>
           </el-radio-group>
         </el-form-item>
@@ -2013,14 +2017,23 @@ const debugWeekDaysCalculation = () => {
 :deep(.el-radio-group) {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 4px 8px;
 }
 
 :deep(.el-radio) {
   margin-right: 0;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 12px;
 }
 
 :deep(.el-radio__label) {
-  font-size: 13px;
+  font-size: 12px;
+  padding-left: 5px;
+}
+
+:deep(.el-radio__inner) {
+  width: 13px;
+  height: 13px;
 }
 </style>

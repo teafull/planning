@@ -14,6 +14,10 @@ const typeConfig = [
   { value: 'meeting', label: '会议', color: '#22c55e' },
   { value: 'reminder', label: '提醒', color: '#f59e0b' },
   { value: 'issue', label: '问题', color: '#ef4444' },
+  { value: 'deadline', label: '截止期限', color: '#991b1b' },
+  { value: 'study', label: '学习/培训', color: '#3b82f6' },
+  { value: 'trip', label: '出差/外出', color: '#8b5cf6' },
+  { value: 'vacation', label: '请假/休息', color: '#14b8a6' },
   { value: 'other', label: '其他', color: '#94a3b8' }
 ]
 
