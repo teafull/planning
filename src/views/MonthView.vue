@@ -405,9 +405,9 @@ const daysInMonth = computed(() => {
       if (!event || !event.date) return false
       
       try {
-        // 统一转换为Date对象进行比较
-        const eventStartDate = new Date(event.date)
-        const eventEndDate = event.endDate ? new Date(event.endDate) : eventStartDate
+        // 统一转换为Date对象进行比较（加T00:00:00按本地时区解析，避免UTC偏差一天）
+        const eventStartDate = new Date(event.date + 'T00:00:00')
+        const eventEndDate = event.endDate ? new Date(event.endDate + 'T00:00:00') : eventStartDate
         
         // 检查是否为有效日期
         if (isNaN(eventStartDate.getTime())) return false
@@ -466,7 +466,7 @@ const currentMonthEvents = computed(() => {
     if (!event || !event.date) return false
     
     try {
-      const eventDate = new Date(event.date)
+      const eventDate = new Date(event.date + 'T00:00:00')
       if (isNaN(eventDate.getTime())) return false
       
       return eventDate.getFullYear() === year && (eventDate.getMonth() + 1) === month
@@ -820,7 +820,7 @@ const onDayContextMenu = (e, day) => {
   ctxMenu.value = {
     x: Math.min(e.clientX, window.innerWidth - 190),
     y: Math.min(e.clientY, window.innerHeight - 110),
-    date: day.date
+    date: formatDateLocal(day.date) // 统一为 YYYY-MM-DD 字符串，pasteEvent 依赖此格式
   }
 }
 
@@ -1119,6 +1119,26 @@ onUnmounted(() => {
   color: white;
 }
 
+.day-event-deadline {
+  background: rgba(197, 48, 48, 0.9);
+  color: white;
+}
+
+.day-event-study {
+  background: rgba(49, 130, 206, 0.9);
+  color: white;
+}
+
+.day-event-trip {
+  background: rgba(128, 90, 213, 0.9);
+  color: white;
+}
+
+.day-event-vacation {
+  background: rgba(56, 178, 172, 0.9);
+  color: white;
+}
+
 .day-event-other { 
   background: rgba(113, 128, 150, 0.9); 
   color: white;
@@ -1195,6 +1215,10 @@ onUnmounted(() => {
 .event-item-meeting { border-left-color: #48bb78; }
 .event-item-issue { border-left-color: #f56565; }
 .event-item-reminder { border-left-color: #ed8936; }
+.event-item-deadline { border-left-color: #c53030; }
+.event-item-study { border-left-color: #3182ce; }
+.event-item-trip { border-left-color: #805ad5; }
+.event-item-vacation { border-left-color: #38b2ac; }
 .event-item-other { border-left-color: #718096; }
 
 .event-header {
@@ -1216,6 +1240,10 @@ onUnmounted(() => {
 .event-item-meeting .event-type { background: #48bb78; }
 .event-item-issue .event-type { background: #f56565; }
 .event-item-reminder .event-type { background: #ed8936; }
+.event-item-deadline .event-type { background: #c53030; }
+.event-item-study .event-type { background: #3182ce; }
+.event-item-trip .event-type { background: #805ad5; }
+.event-item-vacation .event-type { background: #38b2ac; }
 .event-item-other .event-type { background: #718096; }
 
 .event-time {
