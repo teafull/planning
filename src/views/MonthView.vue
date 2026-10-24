@@ -97,6 +97,7 @@
                   :title="event.title"
                 >
                   <span class="event-title-text">
+                  <span v-if="event.isAllDay" class="allday-chip">全天</span>
                   {{ getEventShortTitle(event.title) }}
                   <span v-if="!event.isAllDay" class="event-time-text">
                     {{ formatEventTime(event.startTime) }}
@@ -216,6 +217,7 @@
               <span class="event-time" v-if="!event.isAllDay">
                 {{ formatTime(event.startTime) }} - {{ formatTime(event.endTime) }}
               </span>
+              <span class="event-time event-allday" v-else>全天</span>
             </div>
             <div class="event-title">{{ event.title }}</div>
             <div v-if="event.description" class="event-description">
@@ -1104,6 +1106,17 @@ onUnmounted(() => {
   color: white;
 }
 
+/* 全天事件徽章（月历格子内） */
+.allday-chip {
+  font-size: 9px;
+  line-height: 1.4;
+  background: rgba(255, 255, 255, 0.25);
+  padding: 0 4px;
+  border-radius: 6px;
+  margin-right: 3px;
+  flex-shrink: 0;
+}
+
 .day-event-meeting { 
   background: rgba(72, 187, 120, 0.9); 
   color: white;
@@ -1420,6 +1433,10 @@ onUnmounted(() => {
 .month-event-meeting .event-type-badge { background: #48bb78; }
 .month-event-issue .event-type-badge { background: #f56565; }
 .month-event-reminder .event-type-badge { background: #ed8936; }
+.month-event-deadline .event-type-badge { background: #c53030; }
+.month-event-study .event-type-badge { background: #3182ce; }
+.month-event-trip .event-type-badge { background: #805ad5; }
+.month-event-vacation .event-type-badge { background: #38b2ac; }
 .month-event-other .event-type-badge { background: #718096; }
 
 .month-event-item .event-time {
@@ -1429,6 +1446,10 @@ onUnmounted(() => {
 }
 
 .month-event-item .event-time.event-allday {
+  color: #10b981;
+}
+
+.event-item .event-time.event-allday {
   color: #10b981;
 }
 

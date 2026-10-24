@@ -707,6 +707,47 @@ const onDragCopyEnd = (e) => {
   notify('已复制事件', `「${newEvent.title || '未命名'}」→ ${newEvent.date} ${timeText}`)
 }
 
+// ========== 全天事件拖拽调整开始/结束日期 ==========
+const alldayResize = ref(null) // { eventId, mode: 'start'|'end', gridRect }
+
+const startAllDayResize = (e, event, mode) => {
+  e.stopPropagation()
+  e.preventDefault()
+  const grid = e.currentTarget.closest('.all-day-events-grid')
+  if (!grid) return
+  alldayResize.value = {
+    eventId: event.id,
+    mode,
+    gridRect: grid.getBoundingClientRect()
+  }
+  document.body.style.cursor = 'ew-resize'
+  document.body.style.userSelect = 'none'
+}
+
+const onAllDayResizeMove = (e) => {
+  const ar = alldayResize.value
+  if (!ar) return
+  const colWidth = ar.gridRect.width / 7
+  // 限制在当前可见周（周一~周日，0~6）
+  const dayIndex = Math.max(0, Math.min(6, Math.floor((e.clientX - ar.gridRect.left) / colWidth)))
+  const target = events.value.find(ev => ev.id === ar.eventId)
+  if (!target) return
+  const dayStr = formatDateLocal(weekDays.value[dayIndex])
+  if (ar.mode === 'start') {
+    // 开始日期不能晚于结束日期（同日 = 单日事件）
+    if (dayStr <= (target.endDate || target.date)) target.date = dayStr
+  } else {
+    if (dayStr >= target.date) target.endDate = dayStr
+  }
+}
+
+const endAllDayResize = () => {
+  if (!alldayResize.value) return
+  alldayResize.value = null
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
 // 事件弹窗
 const showDialog = ref(false)
 const currentEvent = ref(null)
@@ -941,10 +982,12 @@ onMounted(() => {
   // 事件时间拖拽调整
   document.addEventListener('mousemove', onResizeMove)
   document.addEventListener('mouseup', endResize)
-  // Ctrl拖拽复制 / 右键菜单关闭
+  // Ctrl拖拽复制 / 右键菜单关闭 / 全天事件拖拽
   document.addEventListener('mousemove', onDragCopyMove)
   document.addEventListener('mouseup', onDragCopyEnd)
   document.addEventListener('mousedown', onOutsideMouseDown)
+  document.addEventListener('mousemove', onAllDayResizeMove)
+  document.addEventListener('mouseup', endAllDayResize)
 
   // 启动提醒检查
   startReminderCheck()
@@ -968,6 +1011,8 @@ onMounted(() => {
     document.removeEventListener('mousemove', onDragCopyMove)
     document.removeEventListener('mouseup', onDragCopyEnd)
     document.removeEventListener('mousedown', onOutsideMouseDown)
+    document.removeEventListener('mousemove', onAllDayResizeMove)
+    document.removeEventListener('mouseup', endAllDayResize)
   })
 })
 
@@ -1255,6 +1300,7 @@ const debugWeekDaysCalculation = () => {
                 }"
                 @mousedown.stop="openEventDialog(event)"
               >
+                <div class="allday-resize-handle handle-left" title="拖拽调整开始日期" @mousedown.stop="startAllDayResize($event, event, 'start')"></div>
                 <el-tooltip
                   :content="getEventDetailHtml(event)"
                   raw-content
@@ -1266,6 +1312,7 @@ const debugWeekDaysCalculation = () => {
                     <span v-if="event.span > 1" class="all-day-event-duration">{{ event.span }}天</span>
                   </div>
                 </el-tooltip>
+                <div class="allday-resize-handle handle-right" title="拖拽调整结束日期" @mousedown.stop="startAllDayResize($event, event, 'end')"></div>
               </div>
             </div>
           </div>
@@ -2477,6 +2524,32 @@ const debugWeekDaysCalculation = () => {
   pointer-events: none;
 }
 body.dragging-copy .event-item-absolute { pointer-events: none; }
+
+/* 全天事件日期拖拽手柄 */
+.allday-resize-handle {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 7px;
+  cursor: ew-resize;
+  z-index: 12;
+}
+.allday-resize-handle.handle-left { left: 0; }
+.allday-resize-handle.handle-right { right: 0; }
+.allday-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 20%;
+  bottom: 20%;
+  width: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.8);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.allday-resize-handle:hover::after { opacity: 1; }
 
 @media (prefers-color-scheme: dark) {
   .ctx-menu { background: #2f2f2f; border-color: #3a3a3a; color: #ddd; }
