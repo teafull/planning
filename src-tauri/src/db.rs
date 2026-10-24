@@ -5,12 +5,15 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
+
+use crate::raft_cmd::{
+    apply_command, diff_events, kv_get, kv_upsert, route_diff, RaftCommand,
+};
 
 pub struct Db(pub Mutex<Connection>);
 
@@ -63,13 +66,6 @@ fn resolve_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     default_data_dir(app)
 }
 
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     resolve_data_dir(app)
 }
@@ -103,6 +99,11 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         );",
     )
     .map_err(|e| e.to_string())?;
+
+    // 节点身份(集群 groundwork): 首次启动生成 uuid 并持久化
+    if kv_get(&conn, "node.id")?.is_none() {
+        kv_upsert(&conn, "node.id", &uuid::Uuid::new_v4().to_string())?;
+    }
 
     // 启动时快照备份(失败不阻塞启动)
     let _ = backup_snapshot(&conn);
@@ -218,25 +219,6 @@ pub fn db_set_data_dir(
 
 // ---------- 事件表 ----------
 
-fn get_str(v: &Value, k: &str) -> Option<String> {
-    v.get(k).and_then(|x| x.as_str()).map(String::from)
-}
-fn get_f64(v: &Value, k: &str) -> Option<f64> {
-    v.get(k).and_then(|x| x.as_f64())
-}
-fn get_bool(v: &Value, k: &str) -> Option<bool> {
-    v.get(k).and_then(|x| x.as_bool())
-}
-
-/// 统一 id 为字符串存储(兼容旧数字 id 与新 uuid)
-fn norm_id(v: &Value) -> String {
-    match v.get("id") {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        _ => format!("gen-{}", now_ms()),
-    }
-}
-
 #[tauri::command]
 pub fn db_get_events(db: tauri::State<Db>) -> Result<Vec<Value>, String> {
     let conn = db.0.lock().unwrap();
@@ -288,69 +270,29 @@ pub fn db_get_events(db: tauri::State<Db>) -> Result<Vec<Value>, String> {
     Ok(out)
 }
 
-/// 全量保存: 事务内 upsert + 删除缺失(单事务, 失败整体回滚)
+/// 全量保存(写路径改造后):
+/// diff(精确变更) → 按同步时间范围路由 → 命令 → 单事务 apply
+/// 无实际变更时不写库(不碰 updated_at, 为未来 LWW 语义做准备)
 #[tauri::command]
 pub fn db_save_events(db: tauri::State<Db>, events: Vec<Value>) -> Result<(), String> {
     let mut conn = db.0.lock().unwrap();
-    let now = now_ms();
+
+    let diff = diff_events(&conn, &events)?;
+    if diff.is_empty() {
+        return Ok(()); // 无变更, 零写入
+    }
+
+    // 第 1 期(单机): cluster/local 两路都本地应用, 同一事务保证原子性
+    // 第 2 期(集群): cluster 路径改为 openraft propose
+    let routed = route_diff(&conn, &diff)?;
+    if routed.is_empty() {
+        return Ok(());
+    }
+
     let tx = conn.transaction().map_err(|e| e.to_string())?;
-
-    // 现存 id → created_at(保留首次创建时间)
-    let mut existing: HashMap<String, i64> = HashMap::new();
-    {
-        let mut stmt = tx
-            .prepare("SELECT id, created_at FROM events")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            })
-            .map_err(|e| e.to_string())?;
-        for r in rows {
-            let (id, c) = r.map_err(|e| e.to_string())?;
-            existing.insert(id, c);
-        }
+    for cmd in routed.iter_all() {
+        apply_command(&tx, cmd)?;
     }
-
-    let incoming: HashSet<String> = events.iter().map(norm_id).collect();
-
-    for ev in &events {
-        let id = norm_id(ev);
-        let date = get_str(ev, "date").unwrap_or_default();
-        if date.is_empty() {
-            continue; // 无日期的脏数据跳过
-        }
-        let created = existing.get(&id).copied().unwrap_or(now);
-        tx.execute(
-            "INSERT OR REPLACE INTO events
-             (id, date, end_date, start_time, end_time, title, event_type, description,
-              is_all_day, updated_at, created_at, deleted)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0)",
-            params![
-                id,
-                date,
-                get_str(ev, "endDate"),
-                get_f64(ev, "startTime"),
-                get_f64(ev, "endTime"),
-                get_str(ev, "title").unwrap_or_default(),
-                get_str(ev, "type").unwrap_or_else(|| "task".into()),
-                get_str(ev, "description").unwrap_or_default(),
-                get_bool(ev, "isAllDay").unwrap_or(false) as i64,
-                now,
-                created
-            ],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-
-    // 物理删除已不存在的事件(墓碑机制留给同步功能)
-    for id in existing.keys() {
-        if !incoming.contains(id) {
-            tx.execute("DELETE FROM events WHERE id = ?1", params![id])
-                .map_err(|e| e.to_string())?;
-        }
-    }
-
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -359,29 +301,18 @@ pub fn db_save_events(db: tauri::State<Db>, events: Vec<Value>) -> Result<(), St
 #[tauri::command]
 pub fn db_get_kv(db: tauri::State<Db>, key: String) -> Result<Option<String>, String> {
     let conn = db.0.lock().unwrap();
-    conn.query_row("SELECT value FROM kv WHERE key = ?1", params![key], |row| {
-        row.get::<_, String>(0)
-    })
-    .map(Some)
-    .or_else(|e| {
-        if e == rusqlite::Error::QueryReturnedNoRows {
-            Ok(None)
-        } else {
-            Err(e.to_string())
-        }
-    })
+    kv_get(&conn, &key)
 }
 
+/// kv 写入路由: 需复制的键(任务/绩效/集群配置)走命令路径, 其余(settings/meta)本地直写
 #[tauri::command]
 pub fn db_set_kv(db: tauri::State<Db>, key: String, value: String) -> Result<(), String> {
     let conn = db.0.lock().unwrap();
-    conn.execute(
-        "INSERT INTO kv (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![key, value],
-    )
-    .map(|_| ())
-    .map_err(|e| e.to_string())
+    if crate::raft_cmd::is_replicated_key(&key) {
+        apply_command(&conn, &RaftCommand::SetKv { key, value })
+    } else {
+        kv_upsert(&conn, &key, &value)
+    }
 }
 
 #[tauri::command]
@@ -400,4 +331,29 @@ pub fn db_set_kv_multi(
         .map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| e.to_string())
+}
+
+// ---------- 集群 groundwork(第 1 期: 身份与配置读写) ----------
+
+#[tauri::command]
+pub fn db_get_node_id(db: tauri::State<Db>) -> Result<String, String> {
+    let conn = db.0.lock().unwrap();
+    kv_get(&conn, "node.id")?.ok_or_else(|| "节点身份缺失".to_string())
+}
+
+#[tauri::command]
+pub fn db_get_cluster_config(db: tauri::State<Db>) -> Result<Option<String>, String> {
+    let conn = db.0.lock().unwrap();
+    kv_get(&conn, "cluster.config")
+}
+
+/// 设置集群配置(经命令路径, 未来随 Raft 复制)。要求合法 JSON。
+#[tauri::command]
+pub fn db_set_cluster_config(
+    db: tauri::State<Db>,
+    value: String,
+) -> Result<(), String> {
+    let parsed: Value = serde_json::from_str(&value).map_err(|e| format!("非法 JSON: {e}"))?;
+    let conn = db.0.lock().unwrap();
+    apply_command(&conn, &RaftCommand::SetClusterConfig { value: parsed })
 }

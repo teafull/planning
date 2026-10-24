@@ -8,6 +8,7 @@ use thiserror::Error;
 use chrono::{Local, Datelike};
 
 mod db;
+mod raft_cmd;
 
 // 自定义错误类型，方便前端处理
 #[derive(Debug, Error, Serialize)]
@@ -150,7 +151,10 @@ pub fn run() {
             db::db_set_kv_multi,
             db::db_backup,
             db::db_get_data_dir,
-            db::db_set_data_dir
+            db::db_set_data_dir,
+            db::db_get_node_id,
+            db::db_get_cluster_config,
+            db::db_set_cluster_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
