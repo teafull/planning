@@ -857,7 +857,7 @@ pub async fn cluster_leave(
 /// 移除其他节点(需 Leader 执行, 非 Leader 自动转发)
 #[tauri::command]
 pub async fn cluster_remove(
-    db: tauri::State<'_, Db>,
+    _db: tauri::State<'_, Db>,
     cluster: tauri::State<'_, ClusterState>,
     raft_id: u64,
 ) -> Result<(), String> {
