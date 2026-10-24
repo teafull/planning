@@ -409,6 +409,7 @@ const copyWeeklyReport = async () => {
       </div>
 
     </header>
+    <div class="page-body">
 
     <section class="stats-grid">
       <el-card v-for="card in summaryCards" :key="card.title" class="summary-card" shadow="never">
@@ -498,6 +499,7 @@ const copyWeeklyReport = async () => {
 
     </section>
 
+    </div>
   </div>
 </template>
 
@@ -505,20 +507,68 @@ const copyWeeklyReport = async () => {
 .stats-page {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 20px;
   height: 100%;
-  overflow-y: auto;
+  overflow: hidden;
   box-sizing: border-box;
-  scrollbar-gutter: stable;
+  background: transparent;
 }
 
+.page-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-sizing: border-box;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.page-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.page-body::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.page-body:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
 
 .stats-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  flex-shrink: 0;
+  padding: 20px 30px;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  .stats-header {
+    background: #2f2f2f;
+    border-bottom-color: #3a3a3a;
+    box-shadow: none;
+  }
+  .stats-title { color: #e5e7eb; }
+  .stats-subtitle { color: #9ca3af; }
+  .stats-page {
+    --el-bg-color: #2f2f2f;
+    --el-card-bg-color: #2f2f2f;
+    --el-border-color-light: #3a3a3a;
+    --el-border-color-lighter: #333333;
+    --el-text-color-primary: #e5e7eb;
+    --el-text-color-regular: #cbd5e1;
+    --el-fill-color-blank: #2f2f2f;
+    --el-fill-color-light: #3a3a3a;
+  }
 }
 
 .stats-title {

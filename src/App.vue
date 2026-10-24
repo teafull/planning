@@ -35,6 +35,12 @@ const route = useRoute()
   background: #f8fafc;
 }
 
+@media (prefers-color-scheme: dark) {
+  .app-layout {
+    background: #1a1a1a;
+  }
+}
+
 
 .side-menu {
   width: 70px;
@@ -42,14 +48,27 @@ const route = useRoute()
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: #1f2329;
-  color: #fff;
+  background: #ffffff;
+  border-right: 1px solid #e2e8f0;
+  color: #4b5563;
   box-sizing: border-box;
-  --el-menu-bg-color: #1f2329;
-  --el-menu-text-color: #d6dbe1;
-  --el-menu-active-color: #ffffff;
-  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.12);
+  --el-menu-bg-color: #ffffff;
+  --el-menu-text-color: #4b5563;
+  --el-menu-active-color: #4f46e5;
+  --el-menu-hover-bg-color: #f1f5f9;
   --el-menu-item-height: 44px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .side-menu {
+    background: #1f2329;
+    border-right-color: #3a3a3a;
+    color: #fff;
+    --el-menu-bg-color: #1f2329;
+    --el-menu-text-color: #d6dbe1;
+    --el-menu-active-color: #ffffff;
+    --el-menu-hover-bg-color: rgba(255, 255, 255, 0.12);
+  }
 }
 
 .side-menu__menu {

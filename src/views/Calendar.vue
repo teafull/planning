@@ -1542,7 +1542,8 @@ const debugWeekDaysCalculation = () => {
   justify-content: space-between;
   padding: 20px 30px;
   background: white;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-bottom: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 .header-controls {

@@ -104,6 +104,7 @@ const handleDialogClose = (done) => {
         <el-button type="primary" @click="saveSettings">保存设置</el-button>
       </div>
     </header>
+    <div class="page-body">
 
     <section class="settings-grid">
       <el-card class="settings-card" shadow="never">
@@ -385,6 +386,7 @@ const handleDialogClose = (done) => {
         </div>
       </el-card>
     </section>
+    </div>
   </div>
 </template>
 
@@ -392,50 +394,80 @@ const handleDialogClose = (done) => {
 .settings-page {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 20px;
   height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  background: transparent;
+}
+
+.page-body {
+  flex: 1;
   overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
   box-sizing: border-box;
   scrollbar-gutter: stable;
-}
-
-.settings-page::-webkit-scrollbar {
-  width: 8px;
-}
-
-.settings-page::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.settings-page::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 4px;
-}
-
-.settings-page:hover::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-}
-
-.settings-page::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
-}
-
-.settings-page {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
 }
 
-.settings-page:hover {
+.page-body:hover {
   scrollbar-color: rgba(0, 0, 0, 0.35) transparent;
 }
 
+.page-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.page-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.page-body::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.page-body:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.page-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
 
 .settings-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  flex-shrink: 0;
+  padding: 20px 30px;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-header {
+    background: #2f2f2f;
+    border-bottom-color: #3a3a3a;
+    box-shadow: none;
+  }
+  .settings-title { color: #e5e7eb; }
+  .settings-subtitle { color: #9ca3af; }
+  .settings-page {
+    --el-bg-color: #2f2f2f;
+    --el-card-bg-color: #2f2f2f;
+    --el-border-color-light: #3a3a3a;
+    --el-border-color-lighter: #333333;
+    --el-text-color-primary: #e5e7eb;
+    --el-text-color-regular: #cbd5e1;
+    --el-fill-color-blank: #2f2f2f;
+    --el-fill-color-light: #3a3a3a;
+  }
 }
 
 .settings-title {
