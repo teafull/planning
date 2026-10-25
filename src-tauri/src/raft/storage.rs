@@ -382,6 +382,8 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
         {
             let conn = self.conn.lock().unwrap();
             restore_from_snapshot_bytes(&conn, &bytes)?;
+            // 快照可能覆盖本地离线写入: 对账 pending, 保留仍需重放的命令
+            let _ = crate::raft_cmd::prune_pending(&conn);
             rkv_set(
                 &conn,
                 "sm.last_applied",

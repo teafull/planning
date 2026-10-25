@@ -349,15 +349,44 @@ pub fn db_get_kv(db: tauri::State<Db>, key: String) -> Result<Option<String>, St
     kv_get(&conn, &key)
 }
 
-/// kv 写入路由: 需复制的键(任务/绩效/集群配置)走命令路径, 其余(settings/meta)本地直写
+/// kv 写入路由: 复制键在集群模式经 Raft 提议(离线模式入队), 其余本地直写
 #[tauri::command]
-pub fn db_set_kv(db: tauri::State<Db>, key: String, value: String) -> Result<(), String> {
-    let conn = db.0.lock().unwrap();
-    if crate::raft_cmd::is_replicated_key(&key) {
-        apply_command(&conn, &RaftCommand::SetKv { key, value })
-    } else {
-        kv_upsert(&conn, &key, &value)
+pub async fn db_set_kv(
+    db: tauri::State<'_, Db>,
+    cluster: tauri::State<'_, ClusterState>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    if !crate::raft_cmd::is_replicated_key(&key) {
+        let conn = db.0.lock().unwrap();
+        return kv_upsert(&conn, &key, &value);
     }
+
+    let cmd = RaftCommand::SetKv { key, value };
+    let raft_on = cluster.handle.try_lock().map(|g| g.is_some()).unwrap_or(true);
+    if !raft_on {
+        // 单机模式
+        let conn = db.0.lock().unwrap();
+        return apply_command(&conn, &cmd);
+    }
+
+    // 集群模式
+    let offline = {
+        let conn = db.0.lock().unwrap();
+        let off = is_offline_mode(&conn);
+        if off {
+            apply_command(&conn, &cmd)?;
+            pending_push(&conn, &cmd)?;
+        }
+        off
+    };
+    if offline {
+        return Ok(());
+    }
+
+    let guard = cluster.handle.lock().await;
+    let handle = guard.as_ref().ok_or("集群句柄缺失")?;
+    ensure_proposed(handle, &cmd).await
 }
 
 #[tauri::command]
@@ -525,7 +554,7 @@ async fn ensure_proposed(handle: &std::sync::Arc<RaftHandle>, cmd: &RaftCommand)
         .map_err(|e| e.to_string())?;
     let resp: Value = client
         .post(format!("http://{forward_addr}/cluster/propose"))
-        .json(&serde_json::json!({ "command": cmd }))
+        .json(&serde_json::json!({ "command": cmd, "token": handle.cluster_token }))
         .send()
         .await
         .map_err(|e| format!("转发失败: {e}"))?
@@ -690,7 +719,7 @@ pub async fn cluster_join(
         let c = reqwest::Client::new();
         let _ = c
             .post(format!("http://{t}/cluster/promote"))
-            .json(&serde_json::json!({ "raftId": my_id }))
+            .json(&serde_json::json!({ "raftId": my_id, "token": token }))
             .send()
             .await;
     });
@@ -777,7 +806,7 @@ async fn forward_remove_to_leader(handle: &std::sync::Arc<RaftHandle>, raft_id: 
         .map_err(|e| e.to_string())?;
     let resp: Value = client
         .post(format!("http://{addr}/cluster/remove"))
-        .json(&serde_json::json!({ "raftId": raft_id }))
+        .json(&serde_json::json!({ "raftId": raft_id, "token": handle.cluster_token }))
         .send()
         .await
         .map_err(|e| format!("转发失败: {e}"))?
@@ -801,8 +830,10 @@ async fn shutdown_cluster_local(
         jh.abort();
     }
     *cluster.handle.lock().await = None;
-    // 配置回单机(保留 syncSince 供下次使用)
+    // 配置回单机(保留 syncSince 供下次使用); 清空离线队列防跨集群污染
     let conn = db.0.lock().unwrap();
+    let _ = crate::raft_cmd::kv_upsert(&conn, "cluster.pending", "[]");
+    let _ = crate::raft_cmd::kv_upsert(&conn, "cluster.offline", "0");
     let old: crate::raft::ClusterConfig = crate::raft_cmd::kv_get(&conn, "cluster.config")
         .ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let cfg = crate::raft::ClusterConfig {

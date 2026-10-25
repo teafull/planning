@@ -294,6 +294,81 @@ pub fn apply_command(conn: &Connection, cmd: &RaftCommand) -> Result<(), String>
     }
 }
 
+// ---------- 离线积压对账(快照恢复保护) ----------
+
+/// 快照恢复后对账 pending 队列:
+/// 快照重建会覆盖本地离线写入, 逐条对账——丢弃已在本地的命令, 保留仍需重放的,
+/// 避免重放全量旧命令重新打 updated_at 或吞掉离线写入。
+pub fn prune_pending(conn: &Connection) -> Result<(), String> {
+    let raw = match kv_get(conn, "cluster.pending")? {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+    let cmds: Vec<RaftCommand> = match serde_json::from_str(&raw) {
+        Ok(c) => c,
+        Err(_) => return Ok(()),
+    };
+
+    let mut kept = Vec::new();
+    for cmd in cmds {
+        match cmd {
+            RaftCommand::UpsertEvents { events } => {
+                let mut pending_events = Vec::new();
+                for ev in events {
+                    let id = norm_id(&ev);
+                    let sig = event_signature(&ev);
+                    let local: Option<String> = conn
+                        .query_row(
+                            "SELECT date, end_date, start_time, end_time, title, event_type, description, is_all_day FROM events WHERE id = ?1",
+                            params![id],
+                            |row| {
+                                let partial = serde_json::json!({
+                                    "date": row.get::<_, String>(0)?,
+                                    "endDate": row.get::<_, Option<String>>(1)?,
+                                    "startTime": row.get::<_, Option<f64>>(2)?,
+                                    "endTime": row.get::<_, Option<f64>>(3)?,
+                                    "title": row.get::<_, String>(4)?,
+                                    "type": row.get::<_, String>(5)?,
+                                    "description": row.get::<_, String>(6)?,
+                                    "isAllDay": row.get::<_, i64>(7)? != 0,
+                                });
+                                Ok(event_signature(&partial))
+                            },
+                        )
+                        .ok();
+                    if local.as_deref() != Some(sig.as_str()) {
+                        pending_events.push(ev);
+                    }
+                }
+                if !pending_events.is_empty() {
+                    kept.push(RaftCommand::UpsertEvents { events: pending_events });
+                }
+            }
+            RaftCommand::DeleteEvents { ids } => {
+                let mut rest = Vec::new();
+                for id in ids {
+                    let exists: bool = conn
+                        .query_row("SELECT 1 FROM events WHERE id = ?1", params![id], |_| Ok(true))
+                        .unwrap_or(false);
+                    if exists {
+                        rest.push(id);
+                    }
+                }
+                if !rest.is_empty() {
+                    kept.push(RaftCommand::DeleteEvents { ids: rest });
+                }
+            }
+            other => kept.push(other), // SetKv / SetClusterConfig 保留
+        }
+    }
+
+    kv_upsert(
+        conn,
+        "cluster.pending",
+        &serde_json::to_string(&kept).map_err(|e| e.to_string())?,
+    )
+}
+
 // ---------- 单元测试 ----------
 
 #[cfg(test)]
@@ -357,6 +432,31 @@ mod tests {
             .unwrap();
         assert_eq!(c1, c2, "created_at 必须保留");
         assert!(u2 > u1, "updated_at 必须更新");
+    }
+
+    #[test]
+    fn prune_pending_keeps_unapplied_only() {
+        let conn = mem();
+        // 本地有 e1(与队列一致) 和 e3(队列里但本地被快照覆盖丢了); e2 队列要求删除但本地已无
+        apply_command(&conn, &RaftCommand::UpsertEvents { events: vec![ev(1, "2026-10-24", "a"), ev(3, "2026-10-26", "c")] }).unwrap();
+        // 模拟快照覆盖: e3 被删
+        conn.execute("DELETE FROM events WHERE id = '3'", []).unwrap();
+        kv_upsert(&conn, "cluster.pending", &serde_json::to_string(&vec![
+            RaftCommand::UpsertEvents { events: vec![ev(1, "2026-10-24", "a"), ev(3, "2026-10-26", "c")] },
+            RaftCommand::DeleteEvents { ids: vec!["2".to_string()] },
+        ]).unwrap()).unwrap();
+
+        prune_pending(&conn).unwrap();
+        let raw = kv_get(&conn, "cluster.pending").unwrap().unwrap();
+        let kept: Vec<RaftCommand> = serde_json::from_str(&raw).unwrap();
+        match &kept[0] {
+            RaftCommand::UpsertEvents { events } => {
+                assert_eq!(events.len(), 1, "已在本地的 e1 应丢弃, 被覆盖的 e3 应保留");
+                assert_eq!(get_str(&events[0], "title").unwrap(), "c");
+            }
+            _ => panic!(),
+        }
+        assert_eq!(kept.len(), 1, "目标已不存在的删除命令应丢弃");
     }
 
     #[test]

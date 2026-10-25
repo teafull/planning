@@ -35,17 +35,22 @@ pub struct JoinResponse {
 #[derive(Deserialize)]
 pub struct PromoteRequest {
     pub raft_id: NodeId,
+    pub token: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct RemoveRequest {
     pub raft_id: NodeId,
+    pub token: Option<String>,
 }
 
 async fn cluster_remove(
     State(app): State<AppState>,
     Json(req): Json<RemoveRequest>,
 ) -> Json<GenericResponse> {
+    if !token_ok(&app.handle, &req.token) {
+        return Json(GenericResponse { ok: false, msg: "集群令牌错误".into() });
+    }
     if app.handle.raft.metrics().borrow().state != openraft::ServerState::Leader {
         return Json(GenericResponse { ok: false, msg: "本节点不是 Leader".into() });
     }
@@ -74,6 +79,7 @@ async fn cluster_remove(
 #[derive(Deserialize)]
 pub struct ProposeRequest {
     pub command: super::RaftCommand,
+    pub token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -122,6 +128,14 @@ async fn install_snapshot(
 
 // ---------- 管理接口 ----------
 
+/// 管理接口令牌校验(集群未设令牌时拒绝, 防止空令牌绕过)
+fn token_ok(handle: &std::sync::Arc<RaftHandle>, provided: &Option<String>) -> bool {
+    match (&handle.cluster_token, provided) {
+        (Some(expect), Some(got)) => expect == got,
+        _ => false,
+    }
+}
+
 async fn cluster_join(
     State(app): State<AppState>,
     Json(req): Json<JoinRequest>,
@@ -154,6 +168,9 @@ async fn cluster_promote(
     State(app): State<AppState>,
     Json(req): Json<PromoteRequest>,
 ) -> Json<GenericResponse> {
+    if !token_ok(&app.handle, &req.token) {
+        return Json(GenericResponse { ok: false, msg: "集群令牌错误".into() });
+    }
     let members = app.handle.members_snapshot().await;
     let mut ids: Vec<NodeId> = members
         .iter()
@@ -178,6 +195,9 @@ async fn cluster_propose(
     State(app): State<AppState>,
     Json(req): Json<ProposeRequest>,
 ) -> Json<GenericResponse> {
+    if !token_ok(&app.handle, &req.token) {
+        return Json(GenericResponse { ok: false, msg: "集群令牌错误".into() });
+    }
     match app.handle.raft.client_write(req.command).await {
         Ok(_) => Json(GenericResponse { ok: true, msg: String::new() }),
         Err(e) => Json(GenericResponse { ok: false, msg: format!("{e}") }),
