@@ -588,6 +588,38 @@ async fn flush_pending(
     Ok(done)
 }
 
+/// 枚举本机全部 IPv4 地址(UI 多网卡选择用)
+#[tauri::command]
+pub fn get_local_ips() -> Result<Vec<serde_json::Value>, String> {
+    let ifas = local_ip_address::list_afinet_netifas().map_err(|e| e.to_string())?;
+    let mut list: Vec<serde_json::Value> = ifas
+        .into_iter()
+        .filter_map(|(name, ip)| match ip {
+            std::net::IpAddr::V4(v4) => {
+                let s = v4.to_string();
+                if s.starts_with("127.") {
+                    return None;
+                }
+                // 私网地址标记为"局域网", 其余(198.18 TUN/169.254 链路本地等)视为"虚拟"
+                let o = s.split('.').next().and_then(|x| x.parse::<u32>().ok()).unwrap_or(0);
+                let second = s.split('.').nth(1).and_then(|x| x.parse::<u32>().ok()).unwrap_or(0);
+                let is_lan = o == 192 && second == 168
+                    || o == 10
+                    || (o == 172 && (16..=31).contains(&second));
+                Some(serde_json::json!({ "ip": s, "name": name, "isLan": is_lan }))
+            }
+            _ => None,
+        })
+        .collect();
+    // 局域网地址排前, 便于默认选中
+    list.sort_by(|a, b| {
+        let la = a["isLan"].as_bool().unwrap_or(false);
+        let lb = b["isLan"].as_bool().unwrap_or(false);
+        lb.cmp(&la).then_with(|| a["ip"].as_str().cmp(&b["ip"].as_str()))
+    });
+    Ok(list)
+}
+
 /// 局域网 IP(UDP 探测, 不实际发包)
 fn lan_ip() -> String {
     if let Ok(s) = std::net::UdpSocket::bind("0.0.0.0:0") {

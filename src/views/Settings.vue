@@ -58,6 +58,19 @@ const clusterStatus = ref({ enabled: false, offline: false, pending: 0 })
 const clusterPort = ref(7878)
 const joinTarget = ref('')
 const joinToken = ref('')
+const localIps = ref([])
+const advertiseIp = ref('')  // 空 = 自动探测
+
+const loadLocalIps = async () => {
+  try {
+    localIps.value = await invoke('get_local_ips')
+    // 默认选第一个局域网地址
+    const lan = localIps.value.find(i => i.isLan)
+    if (lan) advertiseIp.value = lan.ip
+  } catch (e) {
+    console.error('枚举网卡失败:', e)
+  }
+}
 const syncSince = ref(null)
 let statusTimer = null
 
@@ -78,7 +91,7 @@ const loadSyncSince = async () => {
 
 const createCluster = async () => {
   try {
-    const res = await invoke('cluster_create', { port: clusterPort.value })
+    const res = await invoke('cluster_create', { port: clusterPort.value, advertise: advertiseIp.value || null })
     await ElMessageBox.alert(
       `集群已创建\n\n集群令牌：${res.token}\n本机地址：${res.addr}\n\n其他设备在设置页「加入集群」填入本机地址与令牌即可`,
       '创建成功',
@@ -99,7 +112,8 @@ const joinCluster = async () => {
     const res = await invoke('cluster_join', {
       target: joinTarget.value.trim(),
       token: joinToken.value.trim(),
-      port: clusterPort.value
+      port: clusterPort.value,
+      advertise: advertiseIp.value || null
     })
     ElMessage.success(`已加入集群，本机为节点 #${res.nodeId}，数据同步中…`)
     loadClusterStatus()
@@ -167,6 +181,7 @@ const saveSyncSince = async () => {
 onMounted(() => {
   loadClusterStatus()
   loadSyncSince()
+  loadLocalIps()
   statusTimer = setInterval(loadClusterStatus, 3000)
 })
 onUnmounted(() => clearInterval(statusTimer))
@@ -535,6 +550,9 @@ const handleDialogClose = (done) => {
           <el-alert type="info" :closable="false" title="当前为单机模式"
             description="开启后，同一局域网内的多台设备可自动同步日历与任务数据。建议 3 台及以上设备组队（至少 2 台常开），否则离线时需开启离线模式。" />
           <div class="cluster-actions-row" style="margin-top: 14px">
+            <el-select v-model="advertiseIp" placeholder="自动探测" style="width: 210px" title="多网卡时选择对外通告的本机地址">
+              <el-option v-for="i in localIps" :key="i.ip" :value="i.ip" :label="`${i.ip}（${i.isLan ? '局域网' : '虚拟/其他'} · ${i.name}）`" />
+            </el-select>
             <el-input-number v-model="clusterPort" :min="1024" :max="65535" :controls="false" style="width: 110px" />
             <el-button type="primary" @click="createCluster">创建集群</el-button>
             <el-divider direction="vertical" />
