@@ -31,7 +31,7 @@ chrono = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
 local-ip-address = "0.6"
-openraft = { version = "0.9", features = ["serde", "storage-v2"] }
+openraft = { version = "0.9", features = ["serde", "storage-v2", "loosen-follower-log-revert"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 axum = "0.7"
