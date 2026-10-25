@@ -73,8 +73,20 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+// 日志初始化: 默认安静, RUST_LOG=planning=debug,openraft=info 开启排障
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new("planning=info,openraft=warn")
+    });
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .try_init();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_tracing();
     tauri::Builder::default().setup(|app| {
         // 初始化 SQLite 存储(失败不阻塞窗口, 前端命令会报错)
         if let Err(e) = db::init(app.handle()) {

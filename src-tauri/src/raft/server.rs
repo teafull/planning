@@ -51,7 +51,7 @@ async fn cluster_remove(
     if !token_ok(&app.handle, &req.token) {
         return Json(GenericResponse { ok: false, msg: "集群令牌错误".into() });
     }
-    if app.handle.raft.metrics().borrow().state != openraft::ServerState::Leader {
+    if crate::raft::metrics_snapshot(&app.handle.raft).state != openraft::ServerState::Leader {
         return Json(GenericResponse { ok: false, msg: "本节点不是 Leader".into() });
     }
     let voters: std::collections::BTreeSet<NodeId> = app
@@ -150,7 +150,7 @@ async fn cluster_join(
         return Json(JoinResponse { ok: false, msg: "集群令牌错误".into(), members: vec![] });
     }
 
-    if app.handle.raft.metrics().borrow().state != openraft::ServerState::Leader {
+    if crate::raft::metrics_snapshot(&app.handle.raft).state != openraft::ServerState::Leader {
         return Json(JoinResponse { ok: false, msg: "本节点不是 Leader, 请向 Leader 节点发起加入".into(), members: vec![] });
     }
 
@@ -205,7 +205,7 @@ async fn cluster_propose(
 }
 
 async fn cluster_status(State(app): State<AppState>) -> Json<serde_json::Value> {
-    let metrics = app.handle.raft.metrics().borrow().clone();
+    let metrics = crate::raft::metrics_snapshot(&app.handle.raft);
     let members: Vec<serde_json::Value> = metrics
         .membership_config
         .nodes()

@@ -10,17 +10,25 @@ export const events = ref([])
 let hydrated = false
 let saveTimer = null
 let lastErrorToast = 0
+let inflight = null
 
-export const loadEvents = async () => {
-  try {
-    const rows = await invoke('db_get_events')
-    events.value = Array.isArray(rows) ? rows : []
-  } catch (e) {
-    console.error('加载事件失败(SQLite):', e)
-    events.value = []
-  } finally {
-    hydrated = true
-  }
+/// 加载事件(单飞: 并发调用共享同一次请求)。
+/// 视图 onMounted 重复加载是有意为之——集群模式下用于给其他节点的复制变更。
+export const loadEvents = () => {
+  if (inflight) return inflight
+  inflight = (async () => {
+    try {
+      const rows = await invoke('db_get_events')
+      events.value = Array.isArray(rows) ? rows : []
+    } catch (e) {
+      console.error('加载事件失败(SQLite):', e)
+      events.value = []
+    } finally {
+      hydrated = true
+      inflight = null
+    }
+  })()
+  return inflight
 }
 
 const persistEvents = async () => {

@@ -121,6 +121,41 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         }
     }
 
+    // schema 版本管理: 新库写入当前版本, 旧库按阶梯迁移
+    const SCHEMA_VERSION: u32 = 1;
+    match kv_get(&conn, "meta.schema_version")?.and_then(|v| v.parse::<u32>().ok()) {
+        None => {
+            kv_upsert(&conn, "meta.schema_version", &SCHEMA_VERSION.to_string())?;
+        }
+        Some(v) if v < SCHEMA_VERSION => {
+            // 阶梯迁移(版本2时启用): if v < 2 { migrate_v1_to_v2(&conn)?; }
+            let mut cur = v;
+            while cur < SCHEMA_VERSION {
+                cur += 1;
+            }
+            kv_upsert(&conn, "meta.schema_version", &SCHEMA_VERSION.to_string())?;
+        }
+        Some(v) if v > SCHEMA_VERSION => {
+            eprintln!("[数据库] 警告: 库 schema 版本 {v} 高于程序支持的 {SCHEMA_VERSION}, 请升级应用");
+        }
+        _ => {}
+    }
+
+    // 一次性迁移: 旧 cluster.config.syncSince → 独立复制键 cluster.sync_since
+    if kv_get(&conn, "cluster.sync_since")?.is_none() {
+        let legacy = kv_get(&conn, "cluster.config")?
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|cfg| {
+                cfg.get("syncSince")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+            });
+        if let Some(since) = legacy {
+            kv_upsert(&conn, "cluster.sync_since", &since)?;
+        }
+    }
+
     // 启动时快照备份(失败不阻塞启动)
     let _ = backup_snapshot(&conn);
 
@@ -807,7 +842,7 @@ pub async fn cluster_status(
     match g.as_ref() {
         None => Ok(serde_json::json!({ "enabled": false, "offline": offline, "pending": pending })),
         Some(h) => {
-            let metrics = h.raft.metrics().borrow().clone();
+            let metrics = crate::raft::metrics_snapshot(&h.raft);
             let members: Vec<Value> = metrics
                 .membership_config
                 .nodes()
@@ -858,7 +893,7 @@ pub async fn cluster_flush_pending(
 }
 
 async fn forward_remove_to_leader(handle: &std::sync::Arc<RaftHandle>, raft_id: u64) -> Result<(), String> {
-    let metrics = handle.raft.metrics().borrow().clone();
+    let metrics = crate::raft::metrics_snapshot(&handle.raft);
     let leader_id = metrics.current_leader.ok_or("集群无 Leader")?;
     let addr = metrics
         .membership_config
@@ -937,7 +972,7 @@ pub async fn cluster_leave(
         voters.into_iter().filter(|id| *id != handle.node_id).collect();
 
     if !remaining.is_empty() {
-        if handle.raft.metrics().borrow().state == openraft::ServerState::Leader {
+        if crate::raft::metrics_snapshot(&handle.raft).state == openraft::ServerState::Leader {
             handle
                 .raft
                 .change_membership(openraft::ChangeMembers::ReplaceAllVoters(remaining), true)
@@ -959,7 +994,7 @@ pub async fn cluster_remove(
     raft_id: u64,
 ) -> Result<(), String> {
     let handle = cluster.handle.lock().await.clone().ok_or("集群未启用")?;
-    if handle.raft.metrics().borrow().state == openraft::ServerState::Leader {
+    if crate::raft::metrics_snapshot(&handle.raft).state == openraft::ServerState::Leader {
         let voters: std::collections::BTreeSet<u64> = handle
             .raft
             .metrics()

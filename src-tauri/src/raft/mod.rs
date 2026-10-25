@@ -33,7 +33,7 @@ pub struct RaftHandle {
 impl RaftHandle {
     /// 当前成员表(从 metrics 读取)
     pub async fn members_snapshot(&self) -> Vec<serde_json::Value> {
-        let m = self.raft.metrics().borrow().membership_config.clone();
+        let m = metrics_snapshot(&self.raft).membership_config;
         m.nodes()
             .map(|(id, n)| serde_json::json!({ "raftId": id, "addr": n.addr }))
             .collect()
@@ -53,6 +53,22 @@ pub struct ClusterConfig {
     pub advertise_addr: Option<String>, // 本机通告地址 ip:port
     #[serde(default)]
     pub node_id: Option<NodeId>,
+}
+
+/// 安全读取 Raft 指标快照。
+/// tokio watch 的 borrow() 在发送端持写锁的极小窗口内会 panic,
+/// 此处以 catch_unwind + 重试兼容(实际触发概率极低, 触发时重试即成功)。
+pub fn metrics_snapshot(raft: &Raft<TypeConfig>) -> openraft::RaftMetrics<NodeId, BasicNode> {
+    let rx = raft.metrics();
+    loop {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rx.borrow().clone()
+        }));
+        if let Ok(m) = r {
+            return m;
+        }
+        std::thread::yield_now();
+    }
 }
 
 pub fn raft_config() -> Config {
