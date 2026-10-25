@@ -1,25 +1,22 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
-import { ElDialog, ElForm, ElFormItem, ElInput, ElDatePicker, ElButton, ElSelect, ElOption, ElTooltip, ElNotification, ElSwitch } from 'element-plus'
-import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ElNotification, ElSwitch, ElButton, ElTooltip } from 'element-plus'
 import { sendNotification, requestPermission, isPermissionGranted } from '@tauri-apps/plugin-notification'
 import { events, loadEvents } from '../store/events'
-import { clipboard, copyEvent, pasteEvent, duplicateEvent, placeEventCopy } from '../store/clipboard'
-import { invoke } from "@tauri-apps/api/core";
+import { clipboard } from '../store/clipboard'
+import { invoke } from '@tauri-apps/api/core'
+import { notifications, preferences } from '../store/settings'
+import { getEventType, formatTime, getEventDetailHtml } from '../utils/eventTypes'
+import { useEventDrag } from '../composables/useEventDrag'
+import { useCopyDrag } from '../composables/useCopyDrag'
+import { useContextMenu } from '../composables/useContextMenu'
+import EventBlock from '../components/calendar/EventBlock.vue'
+import AllDayBar from '../components/calendar/AllDayBar.vue'
+import EventDialog from '../components/calendar/EventDialog.vue'
 
-// 日历配置参数
-import {
-  profile,
-  preferences,
-  notifications,
-  privacy,
-  storage,
-  resetSettings as storeReset
-} from '../store/settings.js'
+// ---------- 节假日 ----------
+const holidayData = ref({})
 
-const holidayData = ref({}) // 节假日数据
-
-// 加载本地节假日数据
 const loadHolidayData = () => {
   const raw = localStorage.getItem('holiday-data')
   if (raw) {
@@ -29,12 +26,10 @@ const loadHolidayData = () => {
   }
 }
 
-// 保存节假日数据
 const saveHolidayData = () => {
   localStorage.setItem('holiday-data', JSON.stringify(holidayData.value))
 }
 
-// 判断某天是否为节假日
 const isHoliday = (date) => {
   if (!holidayData.value || typeof holidayData.value !== 'object') return false
   const dateKey = formatDateKey(date)
@@ -42,14 +37,12 @@ const isHoliday = (date) => {
   return info && info.holiday === true
 }
 
-// 获取节假日名称
 const getHolidayName = (date) => {
   if (!holidayData.value || typeof holidayData.value !== 'object') return ''
   const dateKey = formatDateKey(date)
   return holidayData.value[dateKey]?.name || ''
 }
 
-// 判断某天是否为补班日
 const isWorkday = (date) => {
   if (!holidayData.value || typeof holidayData.value !== 'object') return false
   const dateKey = formatDateKey(date)
@@ -57,7 +50,6 @@ const isWorkday = (date) => {
   return info && info.holiday === false && info.wage === 1
 }
 
-// 获取补班日名称
 const getWorkdayName = (date) => {
   if (!holidayData.value || typeof holidayData.value !== 'object') return ''
   const dateKey = formatDateKey(date)
@@ -65,140 +57,73 @@ const getWorkdayName = (date) => {
   return info && info.holiday === false ? info.name : ''
 }
 
-// 格式化日期键（MM-DD）
 const formatDateKey = (date) => {
   const m = String(date.getMonth() + 1).padStart(2, '0')
   const d = String(date.getDate()).padStart(2, '0')
   return `${m}-${d}`
 }
 
-// getHolidayData 已经有节假日数据不在加载
+// 已有节假日数据则不重复请求
 async function getHolidayData() {
   const raw = localStorage.getItem('holiday-data')
-  if (raw) {
-    console.info("has holiday data")
-  } else {
-    const res = await invoke("http_get", { url: preferences.value.holidayApiUrl });
-    holidayData.value = res.holiday;
-    saveHolidayData();
-  }
+  if (raw) return
+  const res = await invoke('http_get', { url: preferences.value.holidayApiUrl })
+  holidayData.value = res.holiday
+  saveHolidayData()
 }
 
-// 事件类型配置
-const eventTypes = [
-  { value: 'task', label: '任务', color: '#667eea', bgColor: 'linear-gradient(135deg, #667eea 0%, #5a67d8 100%)' },
-  { value: 'meeting', label: '会议', color: '#48bb78', bgColor: 'linear-gradient(135deg, #48bb78 0%, #38a169 100%)' },
-  { value: 'issue', label: '问题', color: '#f56565', bgColor: 'linear-gradient(135deg, #f56565 0%, #e53e3e 100%)' },
-  { value: 'reminder', label: '提醒', color: '#ed8936', bgColor: 'linear-gradient(135deg, #ed8936 0%, #dd6b20 100%)' },
-  { value: 'deadline', label: '截止期限', color: '#c53030', bgColor: 'linear-gradient(135deg, #c53030 0%, #822727 100%)' },
-  { value: 'study', label: '学习/培训', color: '#3182ce', bgColor: 'linear-gradient(135deg, #3182ce 0%, #2b6cb0 100%)' },
-  { value: 'trip', label: '出差/外出', color: '#805ad5', bgColor: 'linear-gradient(135deg, #805ad5 0%, #6b46c1 100%)' },
-  { value: 'vacation', label: '请假/休息', color: '#38b2ac', bgColor: 'linear-gradient(135deg, #38b2ac 0%, #2c7a7b 100%)' },
-  { value: 'other', label: '其他', color: '#718096', bgColor: 'linear-gradient(135deg, #718096 0%, #4a5568 100%)' }
-]
-
-// 获取事件类型配置
-const getEventType = (type) => {
-  return eventTypes.find(t => t.value === type) || eventTypes.find(t => t.value === 'other') // 默认返回"其他"
-}
-
-// 当前周的开始日期
+// ---------- 周视图基础 ----------
 const currentWeekStart = ref(new Date())
 
-
-
-// 提醒开关 - 使用设置中的桌面通知配置
-const reminderEnabled = computed(() => notifications.value.desktop)
-let reminderInterval = null
-const notifiedEvents = ref(new Set()) // 记录已通知的事件ID
-
-// 拖拽状态
-const isDragging = ref(false)
-const dragStartTime = ref(null)
-const dragDay = ref(null)
-
-// 引用
 const weekHeaderRef = ref(null)
 const calendarBodyRef = ref(null)
 
-// 同步滚动
 const onCalendarScroll = () => {
   if (weekHeaderRef.value && calendarBodyRef.value) {
     weekHeaderRef.value.style.transform = `translateX(-${calendarBodyRef.value.scrollLeft}px)`
   }
 }
 
-// 每小时半小时时间片数
-const HALF_HOUR_SLOTS = 2
-
-// 使用设置中的时间配置
 const START_HOUR = computed(() => parseInt(preferences.value.dayStartTime?.split(':')[0] || 8))
 const END_HOUR = computed(() => parseInt(preferences.value.dayEndTime?.split(':')[0] || 23))
 
-// 计算当前周的日期（周一到周日）
+// 当前周的日期（周一到周日）
 const weekDays = computed(() => {
   const days = []
   const start = new Date(currentWeekStart.value)
   const dayOfWeek = start.getDay()
   const diff = start.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1)
-  
-  // 创建周一的日期（不修改原始start对象）
   const monday = new Date(start.getFullYear(), start.getMonth(), diff)
-  
   for (let i = 0; i < 7; i++) {
-    const date = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i)
-    days.push(date)
+    days.push(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i))
   }
   return days
 })
 
-// 生成时间轴（使用设置中的时间范围，每半小时一个单位）
+// 时间片（每半小时一个单位）
 const timeSlots = computed(() => {
   const slots = []
-  const startHour = START_HOUR.value
-  const endHour = END_HOUR.value
-  for (let hour = startHour; hour < endHour; hour++) {
-    for (let half = 0; half < HALF_HOUR_SLOTS; half++) {
-      slots.push({
-        hour: hour,
-        half: half,
-        value: hour + half * 0.5
-      })
+  for (let hour = START_HOUR.value; hour < END_HOUR.value; hour++) {
+    for (let half = 0; half < 2; half++) {
+      slots.push({ hour, half, value: hour + half * 0.5 })
     }
   }
-  // 添加最后一小时
-  slots.push({
-    hour: endHour,
-    half: 0,
-    value: endHour
-  })
+  slots.push({ hour: END_HOUR.value, half: 0, value: END_HOUR.value })
   return slots
 })
 
-// 生成时间轴标签（只显示整点）
+// 时间轴标签（只显示整点）
 const timeLabels = computed(() => {
   const labels = []
-  const startHour = START_HOUR.value
-  const endHour = END_HOUR.value
-  for (let hour = startHour; hour <= endHour; hour++) {
+  for (let hour = START_HOUR.value; hour <= END_HOUR.value; hour++) {
     labels.push(hour)
   }
   return labels
 })
 
-// 格式化日期
-const formatDate = (date) => {
-  return `${date.getMonth() + 1}/${date.getDate()}`
-}
+const formatDate = (date) => `${date.getMonth() + 1}/${date.getDate()}`
 
-// 格式化时间
-const formatTime = (hour) => {
-  const h = Math.floor(hour)
-  const m = (hour % 1) * 60
-  return `${h.toString().padStart(2, '0')}:${m === 0 ? '00' : m.toString()}`
-}
-
-// 时区安全的日期格式化函数（返回YYYY-MM-DD格式，使用本地时区）
+// 时区安全的日期格式化（YYYY-MM-DD, 本地时区）
 const formatDateLocal = (date) => {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -206,14 +131,12 @@ const formatDateLocal = (date) => {
   return `${year}-${month}-${day}`
 }
 
-// 获取某天的事件
 const getEventsByDay = (day) => {
   const dayStr = formatDateLocal(day)
   return events.value.filter(event => {
     if (!event.isAllDay) {
       return event.date === dayStr
     }
-    // 全天事件：检查日期范围
     const eventStart = new Date(event.date)
     const eventEnd = new Date(event.endDate || event.date)
     const targetDay = new Date(dayStr)
@@ -221,60 +144,31 @@ const getEventsByDay = (day) => {
   })
 }
 
-// 获取某天的全天事件
-const getAllDayEvents = (day) => {
-  const dayStr = formatDateLocal(day)
-  return events.value.filter(event => {
-    if (!event.isAllDay) return false
+const getRegularEvents = (day) => getEventsByDay(day).filter(event => !event.isAllDay)
 
-    const eventStart = new Date(event.date)
-    const eventEnd = new Date(event.endDate || event.date)
-    const targetDay = new Date(dayStr)
-    return targetDay >= eventStart && targetDay <= eventEnd
-  })
-}
-
-// 获取某天的非全天事件
-const getRegularEvents = (day) => {
-  const dayEvents = getEventsByDay(day)
-  return dayEvents.filter(event => !event.isAllDay)
-}
-
-// 计算事件的位置和高度（支持并行事件）
+// 计算事件块位置与高度（支持并行分列）
 const getDayEventsForRender = (day) => {
   const dayEvents = getRegularEvents(day)
   if (dayEvents.length === 0) return []
 
-  // 为每个事件计算时间槽索引
   const eventsWithSlots = dayEvents.map(event => {
     const startSlotIndex = timeSlots.value.findIndex(slot => Math.abs(slot.value - event.startTime) < 0.001)
     const endSlotIndex = timeSlots.value.findIndex(slot => Math.abs(slot.value - event.endTime) < 0.001)
-    return {
-      event,
-      startSlotIndex,
-      endSlotIndex
-    }
+    return { event, startSlotIndex, endSlotIndex }
   }).filter(e => e.startSlotIndex !== -1 && e.endSlotIndex !== -1)
 
-  // 按开始时间排序
   eventsWithSlots.sort((a, b) => a.startSlotIndex - b.startSlotIndex)
 
-  // 为事件分配列和宽度
-  const columns = [] // 每列的事件 [ { eventId, startSlotIndex, endSlotIndex, columnIndex } ]
-  const maxColumnsPerSlot = new Map() // 记录每个时间槽需要的最大列数
+  const columns = []
+  const maxColumnsPerSlot = new Map()
 
   eventsWithSlots.forEach(({ event, startSlotIndex, endSlotIndex }) => {
     let columnIndex = 0
     let foundColumn = false
-
-    // 尝试在现有列中找到可以放置的位置
     while (!foundColumn) {
       let canUseColumn = true
-
-      // 检查该列中是否有与当前事件重叠的事件
       for (const colEvent of columns) {
         if (colEvent.columnIndex === columnIndex) {
-          // 判断时间是否重叠
           const isOverlapping = !(endSlotIndex <= colEvent.startSlotIndex || startSlotIndex >= colEvent.endSlotIndex)
           if (isOverlapping) {
             canUseColumn = false
@@ -282,7 +176,6 @@ const getDayEventsForRender = (day) => {
           }
         }
       }
-
       if (canUseColumn) {
         foundColumn = true
       } else {
@@ -290,22 +183,14 @@ const getDayEventsForRender = (day) => {
       }
     }
 
-    // 将事件放入该列
-    columns.push({
-      eventId: event.id,
-      startSlotIndex,
-      endSlotIndex,
-      columnIndex
-    })
+    columns.push({ eventId: event.id, startSlotIndex, endSlotIndex, columnIndex })
 
-    // 更新每个时间槽的最大列数
     for (let i = startSlotIndex; i < endSlotIndex; i++) {
       const currentMax = maxColumnsPerSlot.get(i) || 0
       maxColumnsPerSlot.set(i, Math.max(currentMax, columnIndex + 1))
     }
   })
 
-  // 计算每个事件的样式
   return eventsWithSlots.map(({ event, startSlotIndex, endSlotIndex }) => {
     const columnData = columns.find(c => c.eventId === event.id)
     if (!columnData) return { ...event, style: {} }
@@ -313,17 +198,15 @@ const getDayEventsForRender = (day) => {
     const top = startSlotIndex * 30
     const height = (endSlotIndex - startSlotIndex) * 30
 
-    // 找到该事件覆盖的所有时间槽中的最大列数
     let maxColsInTimeRange = 1
     for (let i = startSlotIndex; i < endSlotIndex; i++) {
       maxColsInTimeRange = Math.max(maxColsInTimeRange, maxColumnsPerSlot.get(i) || 1)
     }
 
-    // 计算宽度和位置
     const padding = 4
-    const availableWidth = 100 - (padding * 2)
+    const availableWidth = 100 - padding * 2
     const columnWidth = availableWidth / maxColsInTimeRange
-    const left = padding + (columnData.columnIndex * columnWidth)
+    const left = padding + columnData.columnIndex * columnWidth
     const right = 100 - (left + columnWidth)
 
     return {
@@ -340,415 +223,67 @@ const getDayEventsForRender = (day) => {
   })
 }
 
-// 获取可选的结束时间（必须大于开始时间）
-const availableEndTimes = computed(() => {
-  if (!form.value.startTime || form.value.startTime === '') {
-    return timeSlots.value
-  }
-  return timeSlots.value.filter(slot => slot.value > form.value.startTime)
+// 本周事件列表（右侧栏）
+const weekEvents = computed(() => {
+  const result = []
+  weekDays.value.forEach(day => {
+    const dayEvents = getEventsByDay(day)
+    dayEvents.forEach(event => result.push(event))
+  })
+  return result.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date)
+    if (a.isAllDay && !b.isAllDay) return -1
+    if (!a.isAllDay && b.isAllDay) return 1
+    return (a.startTime || 0) - (b.startTime || 0)
+  })
 })
 
-// 获取事件详细信息HTML
-const getEventDetailHtml = (event) => {
-  const timeText = event.isAllDay ? '全天' : `${formatTime(event.startTime)} - ${formatTime(event.endTime)}`
-  const dateText = event.isAllDay && event.endDate && event.endDate !== event.date
-    ? `${event.date} 至 ${event.endDate}`
-    : event.date
-  return `
-    <div class="event-tooltip">
-      <div class="tooltip-type" style="background: ${getEventType(event.type).color}">
-        ${getEventType(event.type).label}
-      </div>
-      <div class="tooltip-title">${event.title || '无标题'}</div>
-      <div class="tooltip-time">
-        📅 ${dateText}<br>
-        ⏰ ${timeText}
-      </div>
-      ${event.description ? `<div class="tooltip-desc">${event.description}</div>` : ''}
-    </div>
-  `
+// 本周统计
+const weekStatistics = computed(() => {
+  const totalCount = weekEvents.value.length
+  const allDayCount = weekEvents.value.filter(e => e.isAllDay).length
+  const multiDayCount = weekEvents.value.filter(
+    e => e.isAllDay && e.endDate && e.endDate !== e.date
+  ).length
+  return { totalCount, allDayCount, multiDayCount }
+})
+
+// ---------- 周导航 ----------
+const prevWeek = () => {
+  const newDate = new Date(currentWeekStart.value)
+  newDate.setDate(newDate.getDate() - 7)
+  currentWeekStart.value = newDate
 }
 
-// 开始拖拽（仅左键，右键留给菜单）
-const startDrag = (e, day, slot) => {
-  if (e.button !== 0) return
-  isDragging.value = true
-  dragDay.value = day
-  dragStartTime.value = slot.value
+const nextWeek = () => {
+  const newDate = new Date(currentWeekStart.value)
+  newDate.setDate(newDate.getDate() + 7)
+  currentWeekStart.value = newDate
 }
 
-// 在全天事件区域点击创建新事件
-const startDragAllDay = (e, day) => {
-  const eventDate = formatDateLocal(day)
+const goToToday = () => { currentWeekStart.value = new Date() }
 
-  // 创建临时全天事件对象
-  const tempEvent = {
-    id: Date.now(),
-    date: eventDate,
-    endDate: eventDate,
-    startTime: START_HOUR.value,
-    endTime: END_HOUR.value,
-    title: '',
-    type: 'allDay',
-    isAllDay: true
-  }
+const isToday = (day) => formatDateLocal(day) === formatDateLocal(new Date())
 
-  // 标记为新创建的事件
-  currentEvent.value = tempEvent
-  // 初始化表单值为新事件的值（使用日期范围格式）
-  form.value = {
-    title: tempEvent.title,
-    date: [tempEvent.date, tempEvent.endDate],
-    endDate: tempEvent.endDate,
-    startTime: tempEvent.startTime,
-    endTime: tempEvent.endTime,
-    description: '',
-    type: tempEvent.type,
-    isAllDay: tempEvent.isAllDay
-  }
-  showDialog.value = true
+const getWeekNumber = (date) => {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7))
+  const week1 = new Date(d.getFullYear(), 0, 4)
+  return 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7)
 }
 
-// 拖拽中
-const onDrag = (e) => {
-  if (!isDragging.value) return
-  e.preventDefault()
+const getTotalWeeksInYear = (year) => {
+  const dec28 = new Date(year, 11, 28)
+  const week = getWeekNumber(dec28)
+  return week === 53 ? 53 : 52
 }
 
-// 结束拖拽
-const endDrag = (e, day, slot) => {
-  if (!isDragging.value) return
-  isDragging.value = false
+const remainingWeeks = computed(() => {
+  const now = new Date()
+  return getTotalWeeksInYear(now.getFullYear()) - getWeekNumber(now)
+})
 
-  const endValue = slot.value
-
-  // 使用拖拽起始的日期，确保事件在正确的一天
-  if (dragDay.value && dragStartTime.value !== null) {
-    const eventDate = formatDateLocal(dragDay.value)
-    const startTime = Math.min(dragStartTime.value, endValue)
-    let endTime = Math.max(dragStartTime.value, endValue)
-
-    // 至少需要30分钟的时长
-    if (endTime - startTime < 0.5) {
-      // 如果时长不足30分钟，自动扩展到30分钟
-      endTime = startTime + 0.5
-    }
-
-    // 创建临时事件对象（暂不添加到事件列表）
-    const tempEvent = {
-      id: Date.now(),
-      date: eventDate,
-      startTime: startTime,
-      endTime: endTime,
-      title: '',
-      type: 'task',
-      isAllDay: false
-    }
-    // 标记为新创建的事件
-    currentEvent.value = tempEvent
-    // 初始化表单值为新事件的值
-    form.value = {
-      title: tempEvent.title,
-      date: tempEvent.date,
-      startTime: tempEvent.startTime,
-      endTime: tempEvent.endTime,
-      description: '',
-      type: tempEvent.type,
-      isAllDay: tempEvent.isAllDay
-    }
-    showDialog.value = true
-  }
-
-  dragStartTime.value = null
-  dragDay.value = null
-}
-
-// ========== 拖拽调整事件开始/结束时间 ==========
-const resizing = ref(null) // { eventId, mode: 'start'|'end', startY, origStart, origEnd }
-
-const startResize = (e, event, mode) => {
-  e.stopPropagation()
-  e.preventDefault()
-  resizing.value = {
-    eventId: event.id,
-    mode,
-    startY: e.clientY,
-    origStart: event.startTime,
-    origEnd: event.endTime
-  }
-  document.body.style.cursor = 'ns-resize'
-  document.body.style.userSelect = 'none'
-}
-
-const onResizeMove = (e) => {
-  const r = resizing.value
-  if (!r) return
-  const deltaSlots = Math.round((e.clientY - r.startY) / 30) // 每30px = 0.5小时
-  const target = events.value.find(ev => ev.id === r.eventId)
-  if (!target) return
-
-  if (r.mode === 'start') {
-    let newStart = r.origStart + deltaSlots * 0.5
-    newStart = Math.max(START_HOUR.value, Math.min(newStart, r.origEnd - 0.5))
-    if (newStart !== target.startTime) target.startTime = newStart
-  } else {
-    let newEnd = r.origEnd + deltaSlots * 0.5
-    newEnd = Math.max(r.origStart + 0.5, Math.min(newEnd, END_HOUR.value))
-    if (newEnd !== target.endTime) target.endTime = newEnd
-  }
-}
-
-const endResize = () => {
-  if (!resizing.value) return
-  resizing.value = null
-  document.body.style.cursor = ''
-  document.body.style.userSelect = ''
-}
-
-// ========== 右键菜单 ==========
-const ctxMenu = ref(null) // { x, y, kind: 'event'|'slot', event?, day?, slot? }
-
-const onEventContextMenu = (e, event) => {
-  e.preventDefault()
-  e.stopPropagation()
-  ctxMenu.value = {
-    x: Math.min(e.clientX, window.innerWidth - 190),
-    y: Math.min(e.clientY, window.innerHeight - 250),
-    kind: 'event',
-    event
-  }
-}
-
-const onSlotContextMenu = (e, day, slot) => {
-  e.preventDefault()
-  ctxMenu.value = {
-    x: Math.min(e.clientX, window.innerWidth - 190),
-    y: Math.min(e.clientY, window.innerHeight - 140),
-    kind: 'slot',
-    day,
-    slot: slot.value
-  }
-}
-
-const closeCtxMenu = () => { ctxMenu.value = null }
-
-// 点击菜单外部关闭（点击菜单内部不关闭）
-const onOutsideMouseDown = (e) => {
-  if (ctxMenu.value && !(e.target && e.target.closest && e.target.closest('.ctx-menu'))) {
-    closeCtxMenu()
-  }
-}
-
-const notify = (title, message) => {
-  ElNotification({ title, message, type: 'success', duration: 2000 })
-}
-
-const doCopy = () => {
-  const ev = ctxMenu.value?.event
-  if (!ev) return
-  copyEvent(ev)
-  notify('已复制', `「${ev.title || '未命名'}」已复制，在目标格子右键可粘贴`)
-  closeCtxMenu()
-}
-
-const doCopyNextWeek = () => {
-  const ev = ctxMenu.value?.event
-  if (!ev) return
-  const src = events.value.find(e => e.id === ev.id) || ev
-  const newEvent = duplicateEvent(src, 7)
-  notify('已复制到下周', `「${newEvent.title || '未命名'}」→ ${newEvent.date}`)
-  closeCtxMenu()
-}
-
-// 以副本模式打开编辑弹窗（保存时作为新事件添加，不覆盖原事件）
-const doSaveAsCopy = () => {
-  const ev = ctxMenu.value?.event
-  if (!ev) return
-  const src = events.value.find(e => e.id === ev.id) || ev
-  currentEvent.value = { ...src, id: Date.now() } // 新 id，saveEvent 会走新增分支
-  form.value = {
-    title: src.title,
-    date: src.date,
-    endDate: src.endDate || src.date,
-    startTime: src.startTime,
-    endTime: src.endTime,
-    description: src.description || '',
-    type: src.type,
-    isAllDay: src.isAllDay
-  }
-  showDialog.value = true
-  closeCtxMenu()
-}
-
-const doCtxEdit = () => {
-  const ev = ctxMenu.value?.event
-  if (!ev) return
-  openEventDialog(ev)
-  closeCtxMenu()
-}
-
-const doCtxDelete = () => {
-  const ev = ctxMenu.value?.event
-  if (!ev) return
-  deleteEventItem(ev)
-  closeCtxMenu()
-}
-
-const doPaste = () => {
-  const m = ctxMenu.value
-  if (!m || !clipboard.value) return
-  const newEvent = pasteEvent(formatDateLocal(m.day), m.slot, { min: START_HOUR.value, max: END_HOUR.value })
-  if (newEvent) {
-    const timeText = newEvent.isAllDay ? '全天' : `${formatTime(newEvent.startTime)}-${formatTime(newEvent.endTime)}`
-    notify('已粘贴', `「${newEvent.title || '未命名'}」→ ${newEvent.date} ${timeText}`)
-  }
-  closeCtxMenu()
-}
-
-// 在目标格子新建事件（复用创建流程）
-const doCreateAt = () => {
-  const m = ctxMenu.value
-  if (!m) return
-  const dateStr = formatDateLocal(m.day)
-  currentEvent.value = {
-    id: Date.now(),
-    date: dateStr,
-    startTime: m.slot,
-    endTime: Math.min(m.slot + 1, END_HOUR.value),
-    title: '',
-    type: 'task',
-    isAllDay: false
-  }
-  form.value = { ...currentEvent.value, description: '', endDate: dateStr }
-  showDialog.value = true
-  closeCtxMenu()
-}
-
-// ========== Ctrl+拖拽复制事件 ==========
-const dragCopy = ref(null) // { src, startX, startY, started, ghost: {x,y}, drop: {date,start,left,top,width,height}|null }
-
-// 光标 → 目标时间槽（吸附 0.5h，返回槽元素矩形供预览定位）
-const cursorToSlot = (e) => {
-  const el = document.elementFromPoint(e.clientX, e.clientY)
-  const slotEl = el && el.closest ? el.closest('.time-slot[data-date]') : null
-  if (!slotEl) return null
-  const rect = slotEl.getBoundingClientRect()
-  const value = parseFloat(slotEl.dataset.value)
-  const snapped = Math.round((value + (e.clientY - rect.top) / 30) * 2) / 2
-  return { date: slotEl.dataset.date, slot: snapped, rect }
-}
-
-// 计算落点（光标位置即副本开始时间，越界时保时长前移）与预览几何
-const computeDrop = (e, dc) => {
-  const pos = cursorToSlot(e)
-  if (!pos) { dc.drop = null; return }
-  const duration = dc.src.endTime - dc.src.startTime
-  const start = Math.max(START_HOUR.value, Math.min(pos.slot, END_HOUR.value - duration))
-  dc.drop = {
-    date: pos.date,
-    start,
-    left: pos.rect.left,
-    width: pos.rect.width,
-    top: pos.rect.top - (pos.slot - start) * 60,
-    height: duration * 60
-  }
-}
-
-const onEventMouseDown = (e, event) => {
-  if (e.ctrlKey || e.metaKey) {
-    // Ctrl+拖拽 = 复制到新位置；位移<4px 视为普通点击
-    e.preventDefault()
-    e.stopPropagation()
-    const src = events.value.find(ev => ev.id === event.id) || event
-    dragCopy.value = {
-      src,
-      startX: e.clientX,
-      startY: e.clientY,
-      started: false,
-      ghost: { x: e.clientX, y: e.clientY },
-      drop: null
-    }
-  } else {
-    openEventDialog(event)
-  }
-}
-
-const onDragCopyMove = (e) => {
-  const dc = dragCopy.value
-  if (!dc) return
-  dc.ghost = { x: e.clientX, y: e.clientY }
-  if (!dc.started && Math.hypot(e.clientX - dc.startX, e.clientY - dc.startY) > 4) {
-    dc.started = true
-    document.body.style.cursor = 'copy'
-    document.body.style.userSelect = 'none'
-    document.body.classList.add('dragging-copy')
-  }
-  if (dc.started) computeDrop(e, dc)
-}
-
-const onDragCopyEnd = (e) => {
-  const dc = dragCopy.value
-  if (!dc) return
-  document.body.style.cursor = ''
-  document.body.style.userSelect = ''
-  document.body.classList.remove('dragging-copy')
-  if (!dc.started) { // 视为普通点击，不产生副本
-    dragCopy.value = null
-    return
-  }
-
-  computeDrop(e, dc)
-  const drop = dc.drop
-  dragCopy.value = null
-  if (!drop) return // 未落在时间格子上，取消
-
-  const newEvent = placeEventCopy(dc.src, drop.date, drop.start, { min: START_HOUR.value, max: END_HOUR.value })
-  const timeText = newEvent.isAllDay ? '全天' : `${formatTime(newEvent.startTime)}-${formatTime(newEvent.endTime)}`
-  notify('已复制事件', `「${newEvent.title || '未命名'}」→ ${newEvent.date} ${timeText}`)
-}
-
-// ========== 全天事件拖拽调整开始/结束日期 ==========
-const alldayResize = ref(null) // { eventId, mode: 'start'|'end', gridRect }
-
-const startAllDayResize = (e, event, mode) => {
-  e.stopPropagation()
-  e.preventDefault()
-  const grid = e.currentTarget.closest('.all-day-events-grid')
-  if (!grid) return
-  alldayResize.value = {
-    eventId: event.id,
-    mode,
-    gridRect: grid.getBoundingClientRect()
-  }
-  document.body.style.cursor = 'ew-resize'
-  document.body.style.userSelect = 'none'
-}
-
-const onAllDayResizeMove = (e) => {
-  const ar = alldayResize.value
-  if (!ar) return
-  const colWidth = ar.gridRect.width / 7
-  // 限制在当前可见周（周一~周日，0~6）
-  const dayIndex = Math.max(0, Math.min(6, Math.floor((e.clientX - ar.gridRect.left) / colWidth)))
-  const target = events.value.find(ev => ev.id === ar.eventId)
-  if (!target) return
-  const dayStr = formatDateLocal(weekDays.value[dayIndex])
-  if (ar.mode === 'start') {
-    // 开始日期不能晚于结束日期（同日 = 单日事件）
-    if (dayStr <= (target.endDate || target.date)) target.date = dayStr
-  } else {
-    if (dayStr >= target.date) target.endDate = dayStr
-  }
-}
-
-const endAllDayResize = () => {
-  if (!alldayResize.value) return
-  alldayResize.value = null
-  document.body.style.cursor = ''
-  document.body.style.userSelect = ''
-}
-
-// 事件弹窗
+// ---------- 事件弹窗 ----------
 const showDialog = ref(false)
 const currentEvent = ref(null)
 const form = ref({
@@ -762,7 +297,10 @@ const form = ref({
   isAllDay: false
 })
 
-// 打开事件弹窗
+const notify = (title, message) => {
+  ElNotification({ title, message, type: 'success', duration: 2000 })
+}
+
 const openEventDialog = (event) => {
   currentEvent.value = event
   form.value = {
@@ -778,7 +316,31 @@ const openEventDialog = (event) => {
   showDialog.value = true
 }
 
-// 保存事件
+// 创建/复制入口：填充临时事件与表单后打开弹窗
+const openCreateDialog = (p) => {
+  currentEvent.value = {
+    id: p.id ?? Date.now(),
+    date: p.date,
+    endDate: p.endDate || p.date,
+    startTime: p.startTime,
+    endTime: p.endTime,
+    title: p.title ?? '',
+    type: p.type ?? 'task',
+    isAllDay: !!p.isAllDay
+  }
+  form.value = {
+    title: p.title ?? '',
+    date: p.isAllDay ? [p.date, p.endDate || p.date] : p.date,
+    endDate: p.endDate || p.date,
+    startTime: p.startTime,
+    endTime: p.endTime,
+    description: p.description ?? '',
+    type: p.type ?? 'task',
+    isAllDay: !!p.isAllDay
+  }
+  showDialog.value = true
+}
+
 const saveEvent = () => {
   if (currentEvent.value) {
     const event = events.value.find(e => e.id === currentEvent.value.id)
@@ -790,7 +352,6 @@ const saveEvent = () => {
       event.description = form.value.description
 
       if (form.value.isAllDay) {
-        // 全天事件：处理日期范围
         if (Array.isArray(form.value.date)) {
           event.date = form.value.date[0]
           event.endDate = form.value.date[1] || form.value.date[0]
@@ -799,23 +360,19 @@ const saveEvent = () => {
           event.endDate = form.value.endDate || form.value.date
         }
       } else {
-        // 非全天事件：处理时间和日期
         event.date = form.value.date
         event.startTime = form.value.startTime
         event.endTime = form.value.endTime
       }
     } else {
       // 新事件，添加到事件列表
-      const newEvent = {
-        ...currentEvent.value,
-        title: form.value.title,
-        type: form.value.type,
-        isAllDay: form.value.isAllDay,
-        description: form.value.description
-      }
+      const newEvent = { ...currentEvent.value }
+      newEvent.title = form.value.title
+      newEvent.type = form.value.type
+      newEvent.isAllDay = form.value.isAllDay
+      newEvent.description = form.value.description
 
       if (form.value.isAllDay) {
-        // 全天事件：处理日期范围
         if (Array.isArray(form.value.date)) {
           newEvent.date = form.value.date[0]
           newEvent.endDate = form.value.date[1] || form.value.date[0]
@@ -824,12 +381,10 @@ const saveEvent = () => {
           newEvent.endDate = form.value.endDate || form.value.date
         }
       } else {
-        // 非全天事件：处理时间和日期
         newEvent.date = form.value.date
         newEvent.startTime = form.value.startTime
         newEvent.endTime = form.value.endTime
       }
-
       events.value.push(newEvent)
     }
   }
@@ -865,15 +420,10 @@ const saveEventAsCopy = () => {
   showDialog.value = false
 }
 
-// 删除事件
+// 删除事件（弹窗内）
 const deleteEvent = () => {
   if (currentEvent.value) {
-    const event = events.value.find(e => e.id === currentEvent.value.id)
-    if (event) {
-      // 已存在的事件，删除它
-      events.value = events.value.filter(e => e.id !== currentEvent.value.id)
-    }
-    // 新事件直接关闭弹窗即可（不需要删除，因为还没添加）
+    events.value = events.value.filter(e => e.id !== currentEvent.value.id)
   }
   showDialog.value = false
 }
@@ -883,152 +433,95 @@ const deleteEventItem = (event) => {
   events.value = events.value.filter(e => e.id !== event.id)
 }
 
-// 切换到上一周
-const prevWeek = () => {
-  const newDate = new Date(currentWeekStart.value)
-  newDate.setDate(newDate.getDate() - 7)
-  currentWeekStart.value = newDate
-}
+// ---------- 组合式交互 ----------
+const { isDragging, startDrag, onDrag, endDrag, startDragAllDay, startResize, startAllDayResize } =
+  useEventDrag({ START_HOUR, END_HOUR, weekDays, openCreateDialog })
 
-// 切换到下一周
-const nextWeek = () => {
-  const newDate = new Date(currentWeekStart.value)
-  newDate.setDate(newDate.getDate() + 7)
-  currentWeekStart.value = newDate
-}
+const { dragCopy, onEventMouseDown } =
+  useCopyDrag({ START_HOUR, END_HOUR, openEventDialog, notify })
 
-// 返回本周
-const goToToday = () => {
-  currentWeekStart.value = new Date()
-}
+const {
+  ctxMenu, onEventContextMenu, onSlotContextMenu,
+  doCopy, doCopyNextWeek, doSaveAsCopy, doCtxEdit, doCtxDelete, doPaste, doCreateAt
+} = useContextMenu({ START_HOUR, END_HOUR, formatDateLocal, notify, openEventDialog, openCreateDialog, deleteEventItem })
 
-// 判断是否为今天
-const isToday = (day) => {
-  const today = new Date()
-  return day.getDate() === today.getDate() &&
-         day.getMonth() === today.getMonth() &&
-         day.getFullYear() === today.getFullYear()
-}
-
-// 获取周数（ISO周数）
-const getWeekNumber = (date) => {
-  const d = new Date(date)
-  d.setHours(0, 0, 0, 0)
-  d.setDate(d.getDate() + 4 - (d.getDay() || 7))
-  const yearStart = new Date(d.getFullYear(), 0, 1)
-  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7)
-  return weekNo
-}
-
-// 获取全年总周数
-const getTotalWeeksInYear = (year) => {
-  const lastDay = new Date(year, 11, 31)
-  const weekNo = getWeekNumber(lastDay)
-  // 如果12月31日属于下一年的第一周，则返回52或53
-  return weekNo > 52 ? weekNo - 1 : weekNo
-}
-
-// 计算本年剩余周数
-const remainingWeeks = computed(() => {
-  const currentYear = weekDays.value[0]?.getFullYear()
-  const currentWeek = getWeekNumber(weekDays.value[0])
-  const totalWeeks = getTotalWeeksInYear(currentYear)
-  return totalWeeks - currentWeek
-})
-
-// 获取本周所有事件
-const weekEvents = computed(() => {
+// ---------- 全天事件布局 ----------
+// 本周相关全天事件 → 周内 startIndex/endIndex/span
+const allDayEventsLayout = computed(() => {
   const weekDateStrings = weekDays.value.map(day => formatDateLocal(day))
-  return events.value.filter(event => {
-    // 检查事件是否在本周范围内
-    if (event.isAllDay) {
-      // 全天事件：检查事件日期范围是否与本周有交集
-      const eventStart = new Date(event.date)
-      const eventEnd = new Date(event.endDate || event.date)
-      const weekStart = new Date(weekDateStrings[0])
-      const weekEnd = new Date(weekDateStrings[6])
-      return eventEnd >= weekStart && eventStart <= weekEnd
-    } else {
-      // 非全天事件：检查日期是否在本周
-      return weekDateStrings.includes(event.date)
-    }
+  const relevantEvents = events.value.filter(event => {
+    if (!event.isAllDay) return false
+    const eventStart = new Date(event.date)
+    const eventEnd = new Date(event.endDate || event.date)
+    const weekStart = new Date(weekDateStrings[0])
+    const weekEnd = new Date(weekDateStrings[6])
+    return eventEnd >= weekStart && eventStart <= weekEnd
+  })
+
+  return relevantEvents.map(event => {
+    const eventStartStr = event.date
+    const eventEndStr = event.endDate || event.date
+    const startIndex = weekDateStrings.findIndex(date => date >= eventStartStr)
+    const endIndex = weekDateStrings.findIndex(date => date > eventEndStr)
+    const actualStartIndex = Math.max(0, startIndex)
+    const actualEndIndex = endIndex === -1 ? 7 : endIndex
+    return { ...event, startIndex: actualStartIndex, endIndex: actualEndIndex, span: actualEndIndex - actualStartIndex }
   }).sort((a, b) => {
-    // 按日期和时间排序
-    const dateCompare = a.date.localeCompare(b.date)
-    if (dateCompare !== 0) return dateCompare
-    return a.startTime - b.startTime
+    if (a.startIndex !== b.startIndex) return a.startIndex - b.startIndex
+    return b.span - a.span
   })
 })
 
-// 本周事件统计
-const weekStatistics = computed(() => {
-  const eventsList = weekEvents.value
-  const totalCount = eventsList.length
-  const allDayCount = eventsList.filter(e => e.isAllDay).length
-  const multiDayCount = eventsList.filter(e => e.isAllDay && e.endDate && e.endDate !== e.date).length
-  
-  return {
-    totalCount,
-    allDayCount,
-    multiDayCount
-  }
-})
-
-onMounted(() => {
-  getHolidayData()
-  loadEvents()
-  loadHolidayData()
-
-  // 事件时间拖拽调整
-  document.addEventListener('mousemove', onResizeMove)
-  document.addEventListener('mouseup', endResize)
-  // Ctrl拖拽复制 / 右键菜单关闭 / 全天事件拖拽
-  document.addEventListener('mousemove', onDragCopyMove)
-  document.addEventListener('mouseup', onDragCopyEnd)
-  document.addEventListener('mousedown', onOutsideMouseDown)
-  document.addEventListener('mousemove', onAllDayResizeMove)
-  document.addEventListener('mouseup', endAllDayResize)
-
-  // 启动提醒检查
-  startReminderCheck()
-
-  // 组件卸载时清理定时器
-  onUnmounted(() => {
-    stopReminderCheck()
-    document.removeEventListener('mousemove', onResizeMove)
-    document.removeEventListener('mouseup', endResize)
-    document.removeEventListener('mousemove', onDragCopyMove)
-    document.removeEventListener('mouseup', onDragCopyEnd)
-    document.removeEventListener('mousedown', onOutsideMouseDown)
-    document.removeEventListener('mousemove', onAllDayResizeMove)
-    document.removeEventListener('mouseup', endAllDayResize)
+// 为全天事件分配行（重叠事件不同行）
+const allDayEventsWithLayout = computed(() => {
+  const list = [...allDayEventsLayout.value]
+  const rows = []
+  list.forEach(event => {
+    let placed = false
+    for (let i = 0; i < rows.length; i++) {
+      const hasOverlap = rows[i].some(e =>
+        !(event.startIndex >= e.endIndex || event.endIndex <= e.startIndex)
+      )
+      if (!hasOverlap) {
+        rows[i].push(event)
+        event.row = i
+        placed = true
+        break
+      }
+    }
+    if (!placed) {
+      rows.push([event])
+      event.row = rows.length - 1
+    }
   })
+  return list
 })
 
-
-// 监听开始时间变化，自动调整结束时间
-watch(() => form.value.startTime, (newStartTime) => {
-  if (form.value.endTime && form.value.endTime <= newStartTime) {
-    // 如果结束时间小于等于开始时间，设置为下一个时间段
-    const nextSlot = timeSlots.value.find(slot => slot.value > newStartTime)
-    form.value.endTime = nextSlot ? nextSlot.value : newStartTime + 0.5
-  }
+const getRowEvents = (rowIndex) => allDayEventsWithLayout.value.filter(e => e.row === rowIndex)
+const allDayEventsRowCount = computed(() => {
+  const maxRow = allDayEventsWithLayout.value.reduce((max, e) => Math.max(max, e.row), 0)
+  return maxRow + 1
 })
+const allDayRows = computed(() =>
+  Array.from({ length: allDayEventsRowCount.value }, (_, i) => getRowEvents(i))
+)
 
-// 发送提醒通知
+// ---------- 提醒 ----------
+const reminderEnabled = computed(() => notifications.value.desktop)
+let reminderInterval = null
+const notifiedEvents = ref(new Set())
+
 const sendEventReminder = async (event) => {
   try {
     const hasPermission = await isPermissionGranted()
     if (!hasPermission) {
       await requestPermission()
     }
-
     await sendNotification({
       title: '日程提醒',
       body: `事件标题:${event.title} (${getEventType(event.type).label}) \n事件内容:${event.description}`,
       icon: null
     })
-
     console.log('提醒已发送:', event.title)
   } catch (error) {
     console.error('发送提醒失败:', error)
@@ -1041,56 +534,32 @@ const sendEventReminder = async (event) => {
   }
 }
 
-// 测试提醒
 const testReminder = async () => {
-  const testEvent = {
-    title: '测试提醒',
-    type: 'reminder',
-    description: "这是一个测试提醒"
-  }
-  await sendEventReminder(testEvent);
+  await sendEventReminder({ title: '测试提醒', type: 'reminder', description: '这是一个测试提醒' })
 }
 
-// 检查需要提醒的事件
 const checkReminders = () => {
   if (!reminderEnabled.value) return
-
   const now = new Date()
   const todayStr = formatDateLocal(now)
-  const currentHour = now.getHours()
-  const currentMinute = now.getMinutes()
-  const currentTime = currentHour + currentMinute / 60
+  const currentTime = now.getHours() + now.getMinutes() / 60
 
-  // 检查当前时间段前5分钟内的事件
   events.value.forEach(event => {
     if (event.date === todayStr && !event.isAllDay) {
-      const reminderTime = event.startTime - 5/60 // 提前5分钟提醒
+      const reminderTime = event.startTime - 5 / 60
       const eventKey = `${event.id}-${todayStr}`
-
-      // 如果事件还未通知，且到达提醒时间
       if (!notifiedEvents.value.has(eventKey) && currentTime >= reminderTime && currentTime < event.startTime) {
         sendEventReminder(event)
         notifiedEvents.value.add(eventKey)
       }
     }
   })
-
-  // 清理过期的通知记录（超过1天的记录）
-  const oldDate = formatDateLocal(new Date(now.getTime() - 24 * 60 * 60 * 1000))
-  notifiedEvents.value.forEach(key => {
-    if (key.includes(oldDate)) {
-      notifiedEvents.value.delete(key)
-    }
-  })
 }
 
-// 启动提醒检查
 const startReminderCheck = () => {
-  // 每分钟检查一次
   reminderInterval = setInterval(checkReminders, 60 * 1000)
 }
 
-// 停止提醒检查
 const stopReminderCheck = () => {
   if (reminderInterval) {
     clearInterval(reminderInterval)
@@ -1098,99 +567,17 @@ const stopReminderCheck = () => {
   }
 }
 
-// 检查全天事件是否是跨天事件的第一天
-const isAllDayEventFirstDay = (event, day) => {
-  const dayStr = formatDateLocal(day)
-  return event.date === dayStr
-}
-
-// 获取本周所有全天事件并计算布局
-const allDayEventsLayout = computed(() => {
-  const weekDateStrings = weekDays.value.map(day => formatDateLocal(day))
-
-  // 获取所有与本周相关的全天事件
-  const relevantEvents = events.value.filter(event => {
-    if (!event.isAllDay) return false
-
-    const eventStart = new Date(event.date)
-    const eventEnd = new Date(event.endDate || event.date)
-    const weekStart = new Date(weekDateStrings[0])
-    const weekEnd = new Date(weekDateStrings[6])
-
-    return eventEnd >= weekStart && eventStart <= weekEnd
-  })
-
-  // 为每个事件计算在本周的开始和结束位置
-  return relevantEvents.map(event => {
-    const eventStartStr = event.date
-    const eventEndStr = event.endDate || event.date
-
-    const startIndex = weekDateStrings.findIndex(date => date >= eventStartStr)
-    const endIndex = weekDateStrings.findIndex(date => date > eventEndStr)
-
-    const actualStartIndex = Math.max(0, startIndex)
-    const actualEndIndex = endIndex === -1 ? 7 : endIndex
-
-    return {
-      ...event,
-      startIndex: actualStartIndex,
-      endIndex: actualEndIndex,
-      span: actualEndIndex - actualStartIndex
-    }
-  }).sort((a, b) => {
-    // 先按开始日期排序
-    if (a.startIndex !== b.startIndex) {
-      return a.startIndex - b.startIndex
-    }
-    // 开始日期相同，按跨度的逆序排序（跨度大的优先）
-    return b.span - a.span
-  })
+// ---------- 生命周期 ----------
+onMounted(() => {
+  getHolidayData()
+  loadEvents()
+  loadHolidayData()
+  startReminderCheck()
 })
 
-// 为全天事件分配行和列
-const allDayEventsWithLayout = computed(() => {
-  const events = [...allDayEventsLayout.value]
-  const rows = [] // 每行的事件
-
-  events.forEach(event => {
-    // 找到可以放置的行
-    let placed = false
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i]
-      // 检查该行是否有重叠
-      const hasOverlap = row.some(e =>
-        !(event.startIndex >= e.endIndex || event.endIndex <= e.startIndex)
-      )
-      if (!hasOverlap) {
-        // 放入该行
-        row.push(event)
-        event.row = i
-        placed = true
-        break
-      }
-    }
-
-    // 如果没有找到合适的行，创建新行
-    if (!placed) {
-      rows.push([event])
-      event.row = rows.length - 1
-    }
-  })
-
-  return events
+onUnmounted(() => {
+  stopReminderCheck()
 })
-
-// 获取每一行的事件
-const getRowEvents = (rowIndex) => {
-  return allDayEventsWithLayout.value.filter(e => e.row === rowIndex)
-}
-
-// 获取全天事件区域的行数
-const allDayEventsRowCount = computed(() => {
-  const maxRow = allDayEventsWithLayout.value.reduce((max, e) => Math.max(max, e.row), 0)
-  return maxRow + 1
-})
-
 </script>
 
 <template>
@@ -1234,51 +621,16 @@ const allDayEventsRowCount = computed(() => {
       </div>
 
       <!-- 全天事件区域 -->
-      <div class="all-day-events-section" :style="{ height: `${allDayEventsRowCount * 26}px` }">
-        <div class="all-day-time-header">
-          <div class="all-day-label">全天</div>
-        </div>
-        <div class="all-day-days-container">
-          <div v-for="row in allDayEventsRowCount" :key="row" class="all-day-events-row">
-            <div class="all-day-events-grid">
-              <div
-                v-for="day in weekDays"
-                :key="day.getTime()"
-                class="all-day-day-cell"
-                :class="{ 'today': isToday(day), 'weekend': day.getDay() === 0 || day.getDay() === 6, 'is-workday': isWorkday(day) }"
-                @mousedown.stop="startDragAllDay($event, day)"
-              ></div>
-              <div
-                v-for="event in getRowEvents(row - 1)"
-                :key="event.id"
-                class="all-day-event-bar"
-                :style="{
-                  left: `${(event.startIndex / 7) * 100}%`,
-                  width: `${(event.span / 7) * 100}%`,
-                  background: getEventType(event.type).bgColor,
-                  zIndex: 10
-                }"
-                @mousedown.stop="openEventDialog(event)"
-              >
-                <div class="allday-resize-handle handle-left" title="拖拽调整开始日期" @mousedown.stop="startAllDayResize($event, event, 'start')"></div>
-                <el-tooltip
-                  :content="getEventDetailHtml(event)"
-                  raw-content
-                  placement="top"
-                  :show-after="200"
-                >
-                  <div class="all-day-event-content">
-                    <span class="all-day-event-title">{{ event.title }}</span>
-                    <span v-if="event.span > 1" class="all-day-event-duration">{{ event.span }}天</span>
-                  </div>
-                </el-tooltip>
-                <div class="allday-resize-handle handle-right" title="拖拽调整结束日期" @mousedown.stop="startAllDayResize($event, event, 'end')"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="all-day-event-list-placeholder"></div>
-      </div>
+      <AllDayBar
+        :days="weekDays"
+        :rows="allDayRows"
+        :row-count="allDayEventsRowCount"
+        :is-today="isToday"
+        :is-workday="isWorkday"
+        @create="startDragAllDay"
+        @open="openEventDialog"
+        @resize="startAllDayResize"
+      />
 
       <!-- 日历主体 - 包含滚动容器 -->
       <div class="calendar-scroll-container">
@@ -1308,32 +660,14 @@ const allDayEventsRowCount = computed(() => {
               @contextmenu.prevent="onSlotContextMenu($event, day, slot)"
             ></div>
             <!-- 渲染事件（使用绝对定位） -->
-            <el-tooltip
-              v-for="event in getDayEventsForRender(day)"
-              :key="event.id"
-              :content="getEventDetailHtml(event)"
-              raw-content
-              placement="top"
-              :show-after="200"
-            >
-              <div
-                class="event-item-absolute"
-                :style="{ ...event.style, background: getEventType(event.type).bgColor }"
-                @mousedown.stop="onEventMouseDown($event, event)"
-                @contextmenu.prevent.stop="onEventContextMenu($event, event)"
-              >
-                <div class="resize-handle handle-top" title="拖拽调整开始时间" @mousedown.stop="startResize($event, event, 'start')"></div>
-                <div class="event-content">
-                  <span v-if="event.endTime - event.startTime >= 1" class="event-type-label">{{ getEventType(event.type).label }}</span>
-                  <div class="event-main">
-                    <span v-if="event.endTime - event.startTime >= 1" class="event-time-text">{{ formatTime(event.startTime) }} - {{ formatTime(event.endTime) }}（{{ event.endTime - event.startTime }}h）</span>
-                    <span class="event-title-line">{{ event.title }}</span>
-                    <div v-if="event.endTime - event.startTime >= 2 && event.description" class="event-desc-line">{{ event.description }}</div>
-                  </div>
-                </div>
-                <div class="resize-handle handle-bottom" title="拖拽调整结束时间" @mousedown.stop="startResize($event, event, 'end')"></div>
-              </div>
-            </el-tooltip>
+            <EventBlock
+              v-for="ev in getDayEventsForRender(day)"
+              :key="ev.id"
+              :event="ev"
+              @mousedown="onEventMouseDown"
+              @contextmenu="onEventContextMenu"
+              @resize="startResize"
+            />
           </div>
           </div>
         </div>
@@ -1373,67 +707,13 @@ const allDayEventsRowCount = computed(() => {
     </div>
 
     <!-- 事件编辑弹窗 -->
-    <el-dialog v-model="showDialog" title="编辑事件" width="500px">
-      <el-form :model="form" label-width="80px">
-        <el-form-item label="事件类型">
-          <el-radio-group v-model="form.type">
-            <el-radio v-for="type in eventTypes" :key="type.value" :value="type.value">
-              <span :style="{ color: type.color, fontWeight: 500 }">● {{ type.label }}</span>
-            </el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="事件名称">
-          <el-input v-model="form.title" placeholder="输入事件名称" />
-        </el-form-item>
-        <el-form-item label="事件周期" v-if="form.isAllDay">
-          <el-date-picker
-            v-model="form.date"
-            type="daterange"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            format="YYYY/MM/DD"
-            value-format="YYYY-MM-DD"
-            :locale="zhCn"
-          />
-        </el-form-item>
-        <el-form-item label="日期" v-if="!form.isAllDay">
-          <el-date-picker
-            v-model="form.date"
-            type="date"
-            placeholder="选择日期"
-            format="YYYY/MM/DD"
-            value-format="YYYY-MM-DD"
-            :locale="zhCn"
-          />
-        </el-form-item>
-        <template v-if="!form.isAllDay">
-          <el-form-item label="开始时间">
-            <el-select v-model="form.startTime" placeholder="选择开始时间">
-              <el-option v-for="slot in timeSlots" :key="slot.value" :label="formatTime(slot.value)" :value="slot.value" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="结束时间">
-            <el-select v-model="form.endTime" placeholder="选择结束时间">
-              <el-option v-for="slot in availableEndTimes" :key="slot.value" :label="formatTime(slot.value)" :value="slot.value" />
-            </el-select>
-          </el-form-item>
-        </template>
-        <el-form-item label="描述">
-          <el-input
-            v-model="form.description"
-            type="textarea"
-            :rows="3"
-            placeholder="输入事件描述"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="deleteEvent" type="danger">删除</el-button>
-        <el-button @click="showDialog = false">取消</el-button>
-        <el-button @click="saveEventAsCopy">另存为副本</el-button>
-        <el-button type="primary" @click="saveEvent">保存</el-button>
-      </template>
-    </el-dialog>
+    <EventDialog
+      v-model:show="showDialog"
+      :form="form"
+      @save="saveEvent"
+      @save-copy="saveEventAsCopy"
+      @delete="deleteEvent"
+    />
 
     <!-- 右键菜单 -->
     <Teleport to="body">
@@ -1973,91 +1253,7 @@ const allDayEventsRowCount = computed(() => {
   overflow: hidden;
 }
 
-.event-item-absolute {
-  position: absolute;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 4px 5px 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
-  overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-  min-width: 0;
-  box-sizing: border-box;
-  border-left: 3px solid rgba(0, 0, 0, 0.22);
-}
-
-.event-item-absolute:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-  z-index: 10;
-}
-
 /* 事件分层内容（≥1小时：左上角类型，时间+标题一行垂直居中；短事件仅标题） */
-.event-content {
-  min-width: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  height: 100%;
-}
-
-.event-type-label {
-  align-self: center;
-  flex-shrink: 0;
-  font-size: 9px;
-  font-weight: 600;
-  margin-top: 3px;
-  background: rgba(255, 255, 255, 0.22);
-  padding: 1px 6px;
-  border-radius: 8px;
-  line-height: 1.2;
-}
-
-.event-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 2px;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.event-time-text {
-  flex-shrink: 0;
-  font-size: 10px;
-  opacity: 0.92;
-}
-
-.event-title-line {
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.3;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-.event-desc-line {
-  font-size: 10px;
-  opacity: 0.75;
-  line-height: 1.2;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
-}
-
   html.dark .calendar-app {
     background: #1a1a1a;
   }
@@ -2193,174 +1389,17 @@ const allDayEventsRowCount = computed(() => {
   }
 
   /* 全天事件区域深色模式 */
-  html.dark .all-day-events-section {
-    background: #1f1f1f;
-    border-color: #3a3a3a;
-  }
 
-  html.dark .all-day-time-header {
-    border-color: #3a3a3a;
-  }
 
-  html.dark .all-day-days-container {
-    border-color: #3a3a3a;
-  }
 
-  html.dark .all-day-label {
-    color: #666;
-  }
 
-  html.dark .all-day-events-row {
-    border-color: #2a2a2a;
-  }
 
-  html.dark .all-day-day-cell {
-    border-color: #2a2a2a;
-  }
 
-  html.dark .all-day-day-cell:hover {
-    background: #0a3d1f;
-  }
 
-  html.dark .all-day-day-cell.today {
-    background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%);
-  }
 
-  html.dark .all-day-day-cell.weekend {
-    background: rgba(245, 101, 101, 0.1);
-  }
 
-  html.dark .all-day-event-list-placeholder {
-    border-color: #3a3a3a;
-  }
 
 /* 全天事件区域 */
-.all-day-events-section {
-  display: grid;
-  grid-template-columns: 60px 1fr 300px;
-  border-bottom: 1px solid #e0e0e0;
-  background: #fafafa;
-  box-sizing: border-box;
-  width: 100%;
-  flex-shrink: 0;
-}
-
-.all-day-time-header {
-  border-right: 1px solid #e0e0e0;
-  box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-
-.all-day-label {
-  font-size: 12px;
-  color: #999;
-  font-weight: 500;
-}
-
-.all-day-days-container {
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid #e0e0e0;
-  position: relative;
-}
-
-.all-day-events-row {
-  height: 26px;
-  border-bottom: 0px solid #f0f0f0;
-  position: relative;
-}
-
-.all-day-events-grid {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  width: 100%;
-  height: 100%;
-}
-
-.all-day-day-cell {
-  border-right: 1px solid #f0f0f0;
-  height: 100%;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.all-day-day-cell:last-child {
-  border-right: none;
-}
-
-.all-day-day-cell:hover {
-  background: #f0f9ff;
-}
-
-.all-day-day-cell.today {
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-}
-
-.all-day-day-cell.weekend {
-  background: rgba(245, 101, 101, 0.05);
-}
-
-.all-day-day-cell.is-workday {
-  background: rgba(16, 185, 129, 0.05);
-}
-
-.all-day-event-bar {
-  position: absolute;
-  top: 1px;
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 4px;
-  color: white;
-  font-size: 11px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-  transition: transform 0.2s, box-shadow 0.2s;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.all-day-event-bar:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 3px 8px rgba(102, 126, 234, 0.4);
-  z-index: 20;
-}
-
-.all-day-event-content {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  min-width: 0;
-}
-
-.all-day-event-title {
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
-.all-day-event-duration {
-  font-size: 10px;
-  background: rgba(255, 255, 255, 0.2);
-  padding: 1px 6px;
-  border-radius: 8px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.all-day-event-list-placeholder {
-  border-left: 1px solid #e0e0e0;
-  box-sizing: border-box;
-}
-
 /* Tooltip 样式 */
 .event-tooltip {
   padding: 12px;
@@ -2399,31 +1438,6 @@ const allDayEventsRowCount = computed(() => {
 }
 
 /* 事件时间调整手柄 */
-.resize-handle {
-  position: absolute;
-  left: 3px;
-  right: 3px;
-  height: 6px;
-  cursor: ns-resize;
-  z-index: 5;
-}
-.resize-handle.handle-top { top: 0; }
-.resize-handle.handle-bottom { bottom: 0; }
-.resize-handle::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  top: 2px;
-  width: 24px;
-  height: 2px;
-  border-radius: 1px;
-  background: rgba(255, 255, 255, 0.8);
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-.resize-handle:hover::after { opacity: 1; }
-
 /* 右键菜单 */
 .ctx-menu {
   position: fixed;
@@ -2482,59 +1496,9 @@ const allDayEventsRowCount = computed(() => {
   border-radius: 10px;
   pointer-events: none;
 }
-body.dragging-copy .event-item-absolute { pointer-events: none; }
-
 /* 全天事件日期拖拽手柄 */
-.allday-resize-handle {
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  width: 7px;
-  cursor: ew-resize;
-  z-index: 12;
-}
-.allday-resize-handle.handle-left { left: 0; }
-.allday-resize-handle.handle-right { right: 0; }
-.allday-resize-handle::after {
-  content: '';
-  position: absolute;
-  top: 20%;
-  bottom: 20%;
-  width: 2px;
-  left: 50%;
-  transform: translateX(-50%);
-  border-radius: 1px;
-  background: rgba(255, 255, 255, 0.8);
-  opacity: 0;
-  transition: opacity 0.2s;
-}
-.allday-resize-handle:hover::after { opacity: 1; }
-
   html.dark .ctx-menu { background: #2f2f2f; border-color: #3a3a3a; color: #ddd; }
   html.dark .ctx-item:hover { background: #3a3a3a; color: #7aa7ff; }
   html.dark .ctx-sep { background: #3a3a3a; }
 
-/* 单选框样式优化 */
-:deep(.el-radio-group) {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-}
-
-:deep(.el-radio) {
-  margin-right: 0;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: 12px;
-}
-
-:deep(.el-radio__label) {
-  font-size: 12px;
-  padding-left: 5px;
-}
-
-:deep(.el-radio__inner) {
-  width: 13px;
-  height: 13px;
-}
 </style>
