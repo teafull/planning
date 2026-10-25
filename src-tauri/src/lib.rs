@@ -179,7 +179,8 @@ pub fn run() {
             db::cluster_leave,
             db::cluster_remove,
             db::cluster_set_offline,
-            db::cluster_flush_pending
+            db::cluster_flush_pending,
+            db::cluster_sync_all
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
