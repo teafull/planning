@@ -244,6 +244,28 @@ pub fn route_diff(conn: &Connection, diff: &EventsDiff) -> Result<RoutedCommands
             if !out_del.is_empty() {
                 local.push(RaftCommand::DeleteEvents { ids: out_del });
             }
+
+            // 移出范围: 事件旧日期在范围内(已复制到集群), 新日期在范围外
+            // → 集群需删除旧版本, 否则各节点旧数据永不收敛
+            let mut moved_out_deletes: Vec<String> = Vec::new();
+            for ev in &diff.upserts {
+                let in_range_now = get_str(ev, "date")
+                    .map(|d| d.as_str() >= since.as_str())
+                    .unwrap_or(false);
+                if in_range_now {
+                    continue;
+                }
+                let id = norm_id(ev);
+                let old_date: Option<String> = conn
+                    .query_row("SELECT date FROM events WHERE id = ?1", params![id], |r| r.get(0))
+                    .ok();
+                if old_date.map(|d| d >= since).unwrap_or(false) {
+                    moved_out_deletes.push(id);
+                }
+            }
+            if !moved_out_deletes.is_empty() {
+                cluster.push(RaftCommand::DeleteEvents { ids: moved_out_deletes });
+            }
         }
     }
 
@@ -440,6 +462,37 @@ mod tests {
             .unwrap();
         assert_eq!(c1, c2, "created_at 必须保留");
         assert!(u2 > u1, "updated_at 必须更新");
+    }
+
+    #[test]
+    fn moved_out_of_range_emits_cluster_delete() {
+        let conn = mem();
+        // 范围内事件已在库
+        apply_command(&conn, &RaftCommand::UpsertEvents { events: vec![ev(7, "2026-10-24", "in")] }).unwrap();
+        apply_command(&conn, &RaftCommand::SetClusterConfig { value: json!({ "syncSince": "2025-01-01" }) }).unwrap();
+
+        // 改日期到范围外 → 集群应收到删除命令(旧版本善后), 新版本仅本地
+        let diff = diff_events(&conn, &[ev(7, "2019-06-01", "moved-out")]).unwrap();
+        let routed = route_diff(&conn, &diff).unwrap();
+
+        let cluster_delete = routed.cluster.iter().find_map(|c| match c {
+            RaftCommand::DeleteEvents { ids } => Some(ids.clone()),
+            _ => None,
+        });
+        assert_eq!(cluster_delete, Some(vec!["7".to_string()]), "移出范围应产生集群删除");
+
+        let local_up = routed.local.iter().find_map(|c| match c {
+            RaftCommand::UpsertEvents { events } => Some(events.len()),
+            _ => None,
+        });
+        assert_eq!(local_up, Some(1), "新版本应仅本地应用");
+
+        // 对照: 纯范围内改名不应产生集群删除
+        apply_command(&conn, &RaftCommand::UpsertEvents { events: diff.upserts.clone() }).unwrap();
+        apply_command(&conn, &RaftCommand::UpsertEvents { events: vec![ev(8, "2026-10-20", "in8")] }).unwrap();
+        let diff3 = diff_events(&conn, &[ev(7, "2019-06-01", "moved-out"), ev(8, "2026-10-21", "in8-rename")]).unwrap();
+        let routed3 = route_diff(&conn, &diff3).unwrap();
+        assert!(!routed3.cluster.iter().any(|c| matches!(c, RaftCommand::DeleteEvents { .. })), "范围内变更不应产生集群删除");
     }
 
     #[test]

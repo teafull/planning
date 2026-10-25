@@ -278,13 +278,11 @@ const loadHolidayData = async () => {
       const data = JSON.parse(raw)
       if (data && typeof data === 'object') {
         holidayData.value = data
-        console.log('节假日数据加载成功，共', Object.keys(data).length, '条记录')
       } else {
         console.warn('节假日数据格式不正确，使用空数据')
         holidayData.value = {}
       }
     } else {
-      console.log('未找到本地节假日数据')
       holidayData.value = {}
     }
   } catch (error) {
@@ -658,8 +656,6 @@ const formatEventTime = (time) => {
 // 监听当前日期变化，自动加载相关事件
 watch([currentYear, currentMonth], () => {
   // 可以在这里加载该月的事件数据
-  console.log(`加载 ${currentYear.value}年${currentMonth.value}月的事件`)
-  debugMonthCalendar(currentYear.value, currentMonth.value)
 })
 
 // 监听事件变化时清除缓存
@@ -752,68 +748,6 @@ const eventsOverlap = (event1, event2) => {
   return event1.startMinutes < event2.endMinutes && event2.startMinutes < event1.endMinutes
 }
 
-// 调试函数：检查事件重复
-const debugEventDuplicates = () => {
-  const eventsByDate = new Map()
-  
-  events.value.forEach(event => {
-    const dateKey = event.date || 'unknown'
-    if (!eventsByDate.has(dateKey)) {
-      eventsByDate.set(dateKey, [])
-    }
-    eventsByDate.get(dateKey).push(event)
-  })
-  
-  // 检查每个日期是否有重复事件
-  eventsByDate.forEach((dateEvents, date) => {
-    const eventKeys = dateEvents.map(e => `${e.id || 'no-id'}-${e.title}-${e.startTime}`)
-    const uniqueKeys = new Set(eventKeys)
-    
-    if (eventKeys.length !== uniqueKeys.size) {
-      console.warn(`日期 ${date} 发现重复事件:`, dateEvents)
-    }
-  })
-  
-  console.log('事件统计:', {
-    总数: events.value.length,
-    按日期分组: Array.from(eventsByDate.entries()).map(([date, evs]) => ({
-      日期: date,
-      数量: evs.length
-    }))
-  })
-}
-
-// 调试函数：检查特定月份的日历
-const debugMonthCalendar = (year, month) => {
-  console.log(`=== 调试 ${year}年${month}月 ===`)
-  
-  // 检查月份天数
-  const daysInMonthCount = new Date(year, month, 0).getDate()
-  console.log(`${month}月有 ${daysInMonthCount} 天`)
-  
-  // 检查第一天是星期几
-  const firstDay = new Date(year, month - 1, 1)
-  const dayIndex = firstDay.getDay()
-  const firstDayOfWeekValue = dayIndex === 0 ? 6 : dayIndex - 1
-  console.log(`${month}月1日是星期${dayIndex} (JavaScript), 周一开始模式: ${firstDayOfWeekValue}`)
-  
-  // 检查上个月天数
-  const prevMonthLastDay = new Date(year, month - 1, 0).getDate()
-  console.log(`上个月最后一天: ${prevMonthLastDay}`)
-  
-  // 检查下月需要的天数
-  const totalCells = firstDayOfWeekValue + daysInMonthCount
-  const remainingCells = totalCells % 7 === 0 ? 0 : 7 - (totalCells % 7)
-  console.log(`需要显示的下月天数: ${remainingCells}`)
-  
-  console.log('日历布局:')
-  console.log(`上月占位: ${firstDayOfWeekValue} 天`)
-  console.log(`当月天数: ${daysInMonthCount} 天`)
-  console.log(`下月占位: ${remainingCells} 天`)
-  console.log(`总格子数: ${firstDayOfWeekValue + daysInMonthCount + remainingCells}`)
-  console.log('================================')
-}
-
 // ========== 右键粘贴事件 ==========
 const ctxMenu = ref(null) // { x, y, date }
 
@@ -854,12 +788,9 @@ const doPaste = () => {
 onMounted(() => {
   document.addEventListener('mousedown', onOutsideMouseDown)
   loadHolidayData()
-  debugEventDuplicates()
   
   // 专门调试2026年3月
-  debugMonthCalendar(2026, 3)
   
-  console.log('月视图组件已挂载')
 })
 
 onUnmounted(() => {

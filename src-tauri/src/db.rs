@@ -62,7 +62,7 @@ fn resolve_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
         if fs::create_dir_all(&p).is_ok() {
             return Ok(p);
         }
-        eprintln!("配置的数据目录不可用, 回退默认: {dir}");
+        tracing::warn!("配置的数据目录不可用, 回退默认: {dir}");
     }
     default_data_dir(app)
 }
@@ -136,7 +136,7 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
             kv_upsert(&conn, "meta.schema_version", &SCHEMA_VERSION.to_string())?;
         }
         Some(v) if v > SCHEMA_VERSION => {
-            eprintln!("[数据库] 警告: 库 schema 版本 {v} 高于程序支持的 {SCHEMA_VERSION}, 请升级应用");
+            tracing::warn!("[数据库] 警告: 库 schema 版本 {v} 高于程序支持的 {SCHEMA_VERSION}, 请升级应用");
         }
         _ => {}
     }
@@ -1077,9 +1077,9 @@ pub async fn auto_start_cluster(app: tauri::AppHandle) {
                 *cluster.handle.lock().await = Some(handle);
                 tracing::info!("[集群] 已按配置自动重启: node={node_id} port={port}");
             }
-            Err(e) => eprintln!("[集群] 服务启动失败: {e}"),
+            Err(e) => tracing::error!("[集群] 服务启动失败: {e}"),
         },
-        Err(e) => eprintln!("[集群] 自动重启失败: {e}"),
+        Err(e) => tracing::error!("[集群] 自动重启失败: {e}"),
     }
 
     // 周期性重放积压(全局单例)

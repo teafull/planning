@@ -263,10 +263,13 @@ const quadrants = ref([
   }
 ])
 
+let quadrantsLoadedRaw = ''
+
 const loadQuadrants = async () => {
   try {
     const raw = await invoke('db_get_kv', { key: 'tasks.quadrants' })
     if (!raw) return
+    quadrantsLoadedRaw = raw
     const parsed = JSON.parse(raw)
     quadrants.value = quadrants.value.map(quadrant => ({
       ...quadrant,
@@ -282,7 +285,9 @@ const saveQuadrants = () => {
     acc[quadrant.id] = quadrant.tasks
     return acc
   }, {})
-  invoke('db_set_kv', { key: 'tasks.quadrants', value: JSON.stringify(payload) }).catch(e => console.error('保存四象限失败:', e))
+  const json = JSON.stringify(payload)
+  if (json === quadrantsLoadedRaw) return // 载入回显, 无变更不回写(集群模式避免多余提案)
+  invoke('db_set_kv', { key: 'tasks.quadrants', value: json }).catch(e => console.error('保存四象限失败:', e))
 }
 
 const addQuadrantTask = (quadrantId) => {

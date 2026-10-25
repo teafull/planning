@@ -130,7 +130,7 @@ pub fn run() {
                     // TODO: Show about dialog
                 }
                 _ => {
-                    println!("Unknown menu item:");
+                    tracing::warn!("Unknown menu item");
                 }
 
             })
