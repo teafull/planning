@@ -704,7 +704,7 @@ pub async fn cluster_create(
         wipe_raft_state(&conn);
     }
 
-    let handle = crate::raft::start_node(1, &db_path, data_dir.join("snapshots"), port, Some(token.clone())).await?;
+    let handle = crate::raft::start_node(Some(app.clone()), 1, &db_path, data_dir.join("snapshots"), port, Some(token.clone())).await?;
 
     // initialize 失败 → 关停 Raft 核心, 不留孤儿
     let mut members = std::collections::BTreeMap::new();
@@ -815,7 +815,7 @@ pub async fn cluster_join(
         let dir = std::path::Path::new(&p).parent().map(|d| d.to_path_buf()).ok_or("无数据目录")?;
         (std::path::PathBuf::from(p), dir)
     };
-    let handle = crate::raft::start_node(my_id, &db_path, data_dir.join("snapshots"), port, Some(token.clone())).await?;
+    let handle = crate::raft::start_node(Some(app.clone()), my_id, &db_path, data_dir.join("snapshots"), port, Some(token.clone())).await?;
     let jh = match crate::raft::server::start_server(handle.clone()).await {
         Ok(jh) => jh,
         Err(e) => {
@@ -1142,7 +1142,7 @@ pub async fn auto_start_cluster(app: tauri::AppHandle) {
         )
     };
 
-    match crate::raft::start_node(node_id, &db_path, snap_dir.join("snapshots"), port, Some(token)).await {
+    match crate::raft::start_node(Some(app.clone()), node_id, &db_path, snap_dir.join("snapshots"), port, Some(token)).await {
         Ok(handle) => match crate::raft::server::start_server(handle.clone()).await {
             Ok(jh) => {
                 *cluster.server_task.lock().await = Some(jh);

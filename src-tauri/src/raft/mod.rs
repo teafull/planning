@@ -92,6 +92,7 @@ pub fn raft_config() -> Config {
 
 /// 启动 raft 节点(日志/状态机使用同一 SQLite 文件的独立连接)
 pub async fn start_node(
+    app: Option<tauri::AppHandle>,
     node_id: NodeId,
     db_path: &std::path::Path,
     snap_dir: std::path::PathBuf,
@@ -99,7 +100,7 @@ pub async fn start_node(
     cluster_token: Option<String>,
 ) -> Result<Arc<RaftHandle>, String> {
     let log_store = storage::LogStore::open(db_path).map_err(|e| e.to_string())?;
-    let sm_store = storage::StateMachineStore::open(db_path, snap_dir).map_err(|e| e.to_string())?;
+    let sm_store = storage::StateMachineStore::open(db_path, snap_dir, app).map_err(|e| e.to_string())?;
 
     let raft = Raft::new(
         node_id,
@@ -181,7 +182,7 @@ mod tests {
         let db3 = temp_db("n3");
 
         // 节点1: 创建单节点集群
-        let n1 = start_node(1, &db1, db1.parent().unwrap().join("snap"), 17801, Some("e2e-token".into()))
+        let n1 = start_node(None, 1, &db1, db1.parent().unwrap().join("snap"), 17801, Some("e2e-token".into()))
             .await
             .unwrap();
 
@@ -208,11 +209,11 @@ mod tests {
         }
 
         // 节点2/3: 启动(不初始化), 由 leader 添加为 learner
-        let n2 = start_node(2, &db2, db2.parent().unwrap().join("snap"), 17802, Some("e2e-token".into()))
+        let n2 = start_node(None, 2, &db2, db2.parent().unwrap().join("snap"), 17802, Some("e2e-token".into()))
             .await
             .unwrap();
         server::start_server(n2.clone()).await.unwrap();
-        let n3 = start_node(3, &db3, db3.parent().unwrap().join("snap"), 17803, Some("e2e-token".into()))
+        let n3 = start_node(None, 3, &db3, db3.parent().unwrap().join("snap"), 17803, Some("e2e-token".into()))
             .await
             .unwrap();
         server::start_server(n3.clone()).await.unwrap();

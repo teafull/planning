@@ -274,6 +274,8 @@ pub struct StateMachineStore {
     /// 最近一次构建/安装的快照(内存缓存, 重启后由 leader 重发)
     snapshot: Mutex<Option<Snapshot<TypeConfig>>>,
     snap_dir: std::path::PathBuf,
+    /// 应用句柄: 集群复制应用后通知前端刷新(单机模式下不用)
+    app: Option<tauri::AppHandle>,
 }
 
 fn now_stamp() -> u128 {
@@ -292,13 +294,18 @@ fn load_last_membership(conn: &Connection) -> StoredMembership<NodeId, BasicNode
 }
 
 impl StateMachineStore {
-    pub fn open(path: &Path, snap_dir: std::path::PathBuf) -> Result<Self, StorageError<NodeId>> {
+    pub fn open(
+        path: &Path,
+        snap_dir: std::path::PathBuf,
+        app: Option<tauri::AppHandle>,
+    ) -> Result<Self, StorageError<NodeId>> {
         let conn = open_conn(path.to_str().unwrap_or_default())?;
         std::fs::create_dir_all(&snap_dir).map_err(err)?;
         Ok(Self {
             conn: Mutex::new(conn),
             snapshot: Mutex::new(None),
             snap_dir,
+            app,
         })
     }
 
@@ -307,6 +314,7 @@ impl StateMachineStore {
             conn: Mutex::new(conn),
             snapshot: Mutex::new(None),
             snap_dir: self.snap_dir.clone(),
+            app: self.app.clone(),
         }
     }
 }
@@ -338,11 +346,13 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
     {
         let conn = self.conn.lock().unwrap();
         let mut results = Vec::new();
+        let mut normal_applied: u64 = 0;
         for e in entries {
             match &e.payload {
                 EntryPayload::Blank => {}
                 EntryPayload::Normal(cmd) => {
                     apply_command(&conn, cmd).map_err(err)?;
+                    normal_applied += 1;
                 }
                 EntryPayload::Membership(m) => {
                     let sm = StoredMembership::new(Some(e.log_id), m.clone());
@@ -359,6 +369,13 @@ impl RaftStateMachine<TypeConfig> for StateMachineStore {
                 &serde_json::to_string(&e.log_id).map_err(err)?,
             )?;
             results.push(());
+        }
+        // 集群复制产生了数据变更 → 通知前端刷新
+        if normal_applied > 0 {
+            if let Some(app) = &self.app {
+                use tauri::Emitter;
+                let _ = app.emit("raft-applied", normal_applied);
+            }
         }
         Ok(results)
     }

@@ -8,10 +8,12 @@ import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import App from "./App.vue";
 import router from './router'
 import { initStores } from './store/init'
+import { initRaftListener } from './store/events'
 import { initTheme } from './store/theme'
 
 // 先水合存储(SQLite + 旧数据迁移)与主题, 再挂载应用
-initStores().then(() => {
+initStores().then(async () => {
+  await initRaftListener()
   initTheme()
   createApp(App).use(ElementPlus, {
     locale: zhCn

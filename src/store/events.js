@@ -1,5 +1,6 @@
 import { ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { ElMessage } from 'element-plus'
 
 // 事件存储 —— SQLite 后端(~/Documents/planning/planning.db)
@@ -58,6 +59,18 @@ const scheduleSave = () => {
 }
 
 watch(events, scheduleSave, { deep: true })
+
+// 集群复制应用后自动刷新(300ms 防抖合并突发)
+let raftListenerReady = false
+let raftRefreshTimer = null
+export const initRaftListener = async () => {
+  if (raftListenerReady) return
+  raftListenerReady = true
+  await listen('raft-applied', () => {
+    clearTimeout(raftRefreshTimer)
+    raftRefreshTimer = setTimeout(() => loadEvents(), 300)
+  })
+}
 
 // 立即落盘(退出前/同步前调用)
 export const flushEvents = () => {

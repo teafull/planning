@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { events, loadEvents } from '../store/events'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 
 const eventTypes = [
   { value: 'task', label: '任务', color: '#667eea', bgColor: 'linear-gradient(135deg, #667eea 0%, #5a67d8 100%)' },
@@ -264,6 +265,7 @@ const quadrants = ref([
 ])
 
 let quadrantsLoadedRaw = ''
+let raftUnlistenFn = null
 
 const loadQuadrants = async () => {
   try {
@@ -361,13 +363,20 @@ const formatNoteTime = (iso) => {
   return `${d.getMonth() + 1}/${d.getDate()}`
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadEvents()
   loadNotes()
   loadQuadrants()
+
+  // 集群复制到达时刷新本地展示
+  raftUnlistenFn = await listen('raft-applied', () => {
+    loadNotes()
+    loadQuadrants()
+  })
 })
 
 onUnmounted(() => {
+    if (raftUnlistenFn) raftUnlistenFn()
   pauseTimer()
 })
 </script>
