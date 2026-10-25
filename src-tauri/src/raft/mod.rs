@@ -249,6 +249,31 @@ mod tests {
         assert!(ok2, "节点2未同步");
         assert!(ok3, "节点3未同步");
 
+        // HTTP 管理接口合同测试: GET status + POST join(驼峰字段) —— 锁线格式
+        {
+            let c = reqwest::Client::new();
+            let st = c
+                .get("http://127.0.0.1:17801/cluster/status")
+                .header("x-cluster-token", "e2e-token")
+                .send().await.unwrap();
+            assert_eq!(st.status(), 200);
+            let body: serde_json::Value = st.json().await.unwrap();
+            assert!(body["membership"].as_array().unwrap().len() >= 3, "成员表应含3节点");
+
+            // 第四节点经 HTTP join: 请求体必须用驼峰 raftId
+            let join = c
+                .post("http://127.0.0.1:17801/cluster/join")
+                .json(&serde_json::json!({
+                    "token": "e2e-token",
+                    "raftId": 4u64,
+                    "addr": "127.0.0.1:19999"
+                }))
+                .send().await.unwrap();
+            assert_eq!(join.status(), 200, "join 应 200");
+            let jv: serde_json::Value = join.json().await.unwrap();
+            assert!(jv["ok"].as_bool().unwrap(), "驼峰字段 join 必须成功: {jv}");
+        }
+
         // 清理测试目录
         for db in [&db1, &db2, &db3] {
             let dir = db.parent().unwrap();

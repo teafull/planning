@@ -19,6 +19,7 @@ pub struct AppState {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JoinRequest {
     pub token: String,
     pub raft_id: NodeId,
@@ -33,12 +34,14 @@ pub struct JoinResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PromoteRequest {
     pub raft_id: NodeId,
     pub token: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoveRequest {
     pub raft_id: NodeId,
     pub token: Option<String>,
