@@ -1021,6 +1021,50 @@ pub async fn cluster_set_offline(
     Ok(serde_json::json!({ "ok": true, "replayed": 0 }))
 }
 
+/// 手动全量同步: 把本地全部(时间范围内)事件推入 Raft 日志。
+/// 用于历史数据补救 / 范围变更后回灌 / 手动对账。
+#[tauri::command]
+pub async fn cluster_sync_all(
+    db: tauri::State<'_, Db>,
+    cluster: tauri::State<'_, ClusterState>,
+) -> Result<serde_json::Value, String> {
+    let handle = cluster.handle.lock().await.clone().ok_or("集群未启用")?;
+
+    // 离线模式下提示先恢复在线
+    let offline = {
+        let conn = db.0.lock().unwrap();
+        is_offline_mode(&conn)
+    };
+    if offline {
+        return Err("当前处于离线模式, 请先关闭离线模式再同步".into());
+    }
+
+    // 收集本地全部事件(时间范围内), guard 在块内释放
+    let cmds = {
+        let conn = db.0.lock().unwrap();
+        crate::raft_cmd::collect_local_events_for_proposal(&conn)?
+    };
+    if cmds.is_empty() {
+        return Ok(serde_json::json!({ "ok": true, "proposed": 0, "msg": "本地无待同步事件" }));
+    }
+
+    let total: usize = cmds.iter().map(|c| match c {
+        RaftCommand::UpsertEvents { events } => events.len(),
+        _ => 0,
+    }).sum();
+
+    // 逐批提议(非 Leader 自动转发)
+    for cmd in &cmds {
+        ensure_proposed(&handle, cmd).await?;
+    }
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "proposed": total,
+        "msg": format!("已将 {total} 条事件推入集群同步")
+    }))
+}
+
 /// 手动重放积压命令
 #[tauri::command]
 pub async fn cluster_flush_pending(

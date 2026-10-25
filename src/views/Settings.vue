@@ -162,6 +162,20 @@ const setOffline = async (v) => {
   }
 }
 
+const syncAll = async () => {
+  try {
+    const r = await invoke('cluster_sync_all')
+    if (r.proposed > 0) {
+      ElMessage.success(r.msg)
+    } else {
+      ElMessage.info(r.msg || '无待同步数据')
+    }
+    loadClusterStatus()
+  } catch (e) {
+    ElMessage.error(String(e))
+  }
+}
+
 const flushPending = async () => {
   try {
     const r = await invoke('cluster_flush_pending')
@@ -597,6 +611,7 @@ const handleDialogClose = (done) => {
               <el-button size="small" type="primary" plain @click="flushPending">立即同步</el-button>
             </template>
             <span v-else class="sync-ok">● 已同步</span>
+            <el-button size="small" type="primary" plain @click="syncAll">同步全部数据</el-button>
             <el-button type="danger" plain @click="leaveCluster">退出集群</el-button>
           </div>
         </div>
