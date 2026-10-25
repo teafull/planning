@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
+use crate::raft::RaftHandle;
 use crate::raft_cmd::{
     apply_command, diff_events, kv_get, kv_upsert, route_diff, RaftCommand,
 };
@@ -103,6 +104,21 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     // 节点身份(集群 groundwork): 首次启动生成 uuid 并持久化
     if kv_get(&conn, "node.id")?.is_none() {
         kv_upsert(&conn, "node.id", &uuid::Uuid::new_v4().to_string())?;
+    }
+
+    // 一次性迁移: 旧 cluster.config.syncSince → 独立复制键 cluster.sync_since
+    if kv_get(&conn, "cluster.sync_since")?.is_none() {
+        let legacy = kv_get(&conn, "cluster.config")?
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|cfg| {
+                cfg.get("syncSince")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+            });
+        if let Some(since) = legacy {
+            kv_upsert(&conn, "cluster.sync_since", &since)?;
+        }
     }
 
     // 启动时快照备份(失败不阻塞启动)
@@ -327,14 +343,12 @@ pub async fn db_save_events(
 
     // 集群路径: 提议(本机 Leader 直写 / 转发), 成功后尽力重放积压
     if !cluster_cmds.is_empty() {
-        {
-            let guard = cluster.handle.lock().await;
-            let handle = guard.as_ref().ok_or("集群句柄缺失")?;
-            for cmd in &cluster_cmds {
-                ensure_proposed(handle, cmd).await.map_err(|e| {
-                    format!("{e}; 集群可能不可用, 可在设置中开启离线模式")
-                })?;
-            }
+        let handle = cluster.handle.lock().await.clone();
+        let handle = handle.ok_or("集群句柄缺失")?;
+        for cmd in &cluster_cmds {
+            ensure_proposed(&handle, cmd).await.map_err(|e| {
+                format!("{e}; 集群可能不可用, 可在设置中开启离线模式")
+            })?;
         }
         let _ = flush_pending(&db, &cluster).await;
     }
@@ -434,14 +448,43 @@ pub fn db_set_cluster_config(
 
 // ---------- 集群管理(Raft 第2期) ----------
 
-use crate::raft::RaftHandle;
-
 /// 集群运行状态(Tauri State 管理)
 #[derive(Default)]
 pub struct ClusterState {
     pub handle: tokio::sync::Mutex<Option<std::sync::Arc<RaftHandle>>>,
     /// axum 服务任务(退出集群时中止, 释放端口)
     pub server_task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// 周期重放任务是否已启动(防重复)
+    pub flusher_started: std::sync::atomic::AtomicBool,
+}
+
+/// 启动 30s 周期积压重放(全局单例)
+pub fn spawn_pending_flusher(app: tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    let db = app.state::<Db>();
+    let cluster = app.state::<ClusterState>();
+    if cluster.flusher_started.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    drop(db);
+    drop(cluster);
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            let db = app.state::<Db>();
+            let cluster = app.state::<ClusterState>();
+            let has_pending = {
+                let conn = db.0.lock().unwrap();
+                !pending_cmds(&conn).is_empty()
+            };
+            let handle = cluster.handle.lock().await.clone();
+            if has_pending {
+                if let Some(_) = handle {
+                    let _ = flush_pending(&db, &cluster).await;
+                }
+            }
+        }
+    });
 }
 
 // ---------- 离线队列(kv 本地键) ----------
@@ -500,15 +543,15 @@ async fn flush_pending(
     if cmds.is_empty() {
         return Ok(0);
     }
-    let guard = cluster.handle.lock().await;
-    let Some(handle) = guard.as_ref() else {
+    let handle = cluster.handle.lock().await.clone();
+    let Some(handle) = handle else {
         let conn = db.0.lock().unwrap();
         pending_prepend(&conn, cmds)?;
         return Err("集群未启用".into());
     };
     let mut done = 0;
     for (i, cmd) in cmds.iter().enumerate() {
-        if let Err(e) = ensure_proposed(handle, cmd).await {
+        if let Err(e) = ensure_proposed(&handle, cmd).await {
             let rest: Vec<RaftCommand> = cmds[i..].to_vec();
             let conn = db.0.lock().unwrap();
             pending_prepend(&conn, rest)?;
@@ -571,6 +614,7 @@ async fn ensure_proposed(handle: &std::sync::Arc<RaftHandle>, cmd: &RaftCommand)
 /// 创建集群: 单节点初始化, 生成令牌, 启动 HTTP 服务
 #[tauri::command]
 pub async fn cluster_create(
+    app: tauri::AppHandle,
     db: tauri::State<'_, Db>,
     cluster: tauri::State<'_, ClusterState>,
     port: u16,
@@ -608,6 +652,7 @@ pub async fn cluster_create(
     let handle_with_token = handle;
     let jh = crate::raft::server::start_server(handle_with_token.clone()).await?;
     *cluster.server_task.lock().await = Some(jh);
+    spawn_pending_flusher(app.clone());
 
     // 持久化配置(保留已有 syncSince)
     {
@@ -635,6 +680,7 @@ pub async fn cluster_create(
 /// 加入集群: 向目标节点登记, 本地作为 learner 启动并自动请求转正
 #[tauri::command]
 pub async fn cluster_join(
+    app: tauri::AppHandle,
     db: tauri::State<'_, Db>,
     cluster: tauri::State<'_, ClusterState>,
     target: String,
@@ -694,6 +740,7 @@ pub async fn cluster_join(
     let handle = crate::raft::start_node(my_id, &db_path, data_dir.join("snapshots"), port, Some(token.clone())).await?;
     let jh = crate::raft::server::start_server(handle.clone()).await?;
     *cluster.server_task.lock().await = Some(jh);
+    spawn_pending_flusher(app.clone());
 
     // 持久化
     {
@@ -712,16 +759,35 @@ pub async fn cluster_join(
     }
     *cluster.handle.lock().await = Some(handle.clone());
 
-    // 4. 追平后自动请求转正(简化: 延迟后触发, 失败不影响数据同步)
+    // 4. 追平后自动请求转正(重试至多12次, 已成为投票者则提前完成)
     let t = target.clone();
+    let promote_handle = handle.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         let c = reqwest::Client::new();
-        let _ = c
-            .post(format!("http://{t}/cluster/promote"))
-            .json(&serde_json::json!({ "raftId": my_id, "token": token }))
-            .send()
-            .await;
+        for _ in 0..12 {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let is_voter = promote_handle
+                .raft
+                .metrics()
+                .borrow()
+                .membership_config
+                .nodes()
+                .any(|(id, _)| *id == promote_handle.node_id);
+            if is_voter {
+                return;
+            }
+            let ok = c
+                .post(format!("http://{t}/cluster/promote"))
+                .json(&serde_json::json!({ "raftId": promote_handle.node_id, "token": token }))
+                .send()
+                .await
+                .and_then(|r| Ok(r.status().is_success()))
+                .unwrap_or(false);
+            if ok {
+                return;
+            }
+        }
+        eprintln!("[集群] 自动转正未完成, 可稍后手动重试加入");
     });
 
     Ok(serde_json::json!({ "nodeId": my_id, "addr": addr }))
@@ -963,19 +1029,6 @@ pub async fn auto_start_cluster(app: tauri::AppHandle) {
         Err(e) => eprintln!("[集群] 自动重启失败: {e}"),
     }
 
-    // 周期性重放积压(离线恢复兑底)
-    tauri::async_runtime::spawn(async move {
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-            let db = app.state::<Db>();
-            let cluster = app.state::<ClusterState>();
-            let has_pending = {
-                let conn = db.0.lock().unwrap();
-                !pending_cmds(&conn).is_empty()
-            };
-            if has_pending && !cluster.handle.lock().await.is_none() {
-                let _ = flush_pending(&db, &cluster).await;
-            }
-        }
-    });
+    // 周期性重放积压(全局单例)
+    spawn_pending_flusher(app.clone());
 }

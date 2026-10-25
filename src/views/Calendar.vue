@@ -991,17 +991,6 @@ onMounted(() => {
 
   // 启动提醒检查
   startReminderCheck()
-  
-  // 测试时区修复
-  console.log('=== 测试时区修复 ===')
-  const testDate = new Date(2026, 2, 24) // 3月24日
-  console.log(`测试日期: ${testDate.toLocaleDateString()}`)
-  console.log(`ISO格式: ${testDate.toISOString().split('T')[0]}`)
-  console.log(`本地格式: ${formatDateLocal(testDate)}`)
-  console.log('=== 时区测试结束 ===')
-  
-  // 调试weekDays计算
-  debugWeekDaysCalculation()
 
   // 组件卸载时清理定时器
   onUnmounted(() => {
@@ -1202,35 +1191,6 @@ const allDayEventsRowCount = computed(() => {
   return maxRow + 1
 })
 
-// 调试函数：检查weekDays计算是否正确
-const debugWeekDaysCalculation = () => {
-  console.log('=== 调试weekDays计算 ===')
-  const weekDaysList = weekDays.value
-  
-  console.log('当前周开始日期:', currentWeekStart.value.toISOString())
-  console.log('计算的weekDays:')
-  weekDaysList.forEach((day, index) => {
-    const dayName = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][index]
-    console.log(`  ${index}: ${dayName} - ${formatDateLocal(day)} (第${day.getDay()}天)`)
-  })
-  
-  // 测试24号是否在正确的位置
-  const targetDate = '2026-03-24'
-  const targetDay = new Date(targetDate)
-  const foundIndex = weekDaysList.findIndex(day => {
-    return formatDateLocal(day) === targetDate
-  })
-  
-  if (foundIndex !== -1) {
-    console.log(`✓ 找到${targetDate}在weekDays中的位置: ${foundIndex}`)
-    console.log(`  对应的星期: ${['周一', '周二', '周三', '周四', '周五', '周六', '周日'][foundIndex]}`)
-  } else {
-    console.log(`✗ 未找到${targetDate}在当前weekDays中`)
-    console.log('当前weekDays包含的日期:', weekDaysList.map(d => formatDateLocal(d)))
-  }
-  
-  console.log('=== weekDays调试结束 ===')
-}
 </script>
 
 <template>

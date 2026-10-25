@@ -52,7 +52,10 @@ pub enum RaftCommand {
 
 /// 需要集群复制的 kv 键前缀(settings/meta/node 等为本地键)
 pub fn is_replicated_key(key: &str) -> bool {
-    key == "cluster.config" || key.starts_with("tasks.") || key.starts_with("performance.")
+    key == "cluster.config"
+        || key == "cluster.sync_since"
+        || key.starts_with("tasks.")
+        || key.starts_with("performance.")
 }
 
 // ---------- 变更检测 ----------
@@ -165,7 +168,12 @@ pub fn kv_upsert(conn: &Connection, key: &str, value: &str) -> Result<(), String
 }
 
 /// 读取集群级同步起始日期(YYYY-MM-DD, 词法比较即可)。无配置 = 全量同步。
+/// 新键 cluster.sync_since(纯日期字符串, 经 Raft 复制);
+/// 兼容旧 cluster.config JSON 内的 syncSince 字段(仅回退读取)。
 pub fn sync_since(conn: &Connection) -> Option<String> {
+    if let Some(v) = kv_get(conn, "cluster.sync_since").ok().flatten() {
+        return if v.is_empty() { None } else { Some(v) };
+    }
     let raw = kv_get(conn, "cluster.config").ok().flatten()?;
     let cfg: Value = serde_json::from_str(&raw).ok()?;
     cfg.get("syncSince")

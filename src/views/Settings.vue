@@ -71,8 +71,8 @@ const loadClusterStatus = async () => {
 
 const loadSyncSince = async () => {
   try {
-    const raw = await invoke('db_get_cluster_config')
-    if (raw) syncSince.value = JSON.parse(raw).syncSince || null
+    const v = await invoke('db_get_kv', { key: 'cluster.sync_since' })
+    syncSince.value = v || null
   } catch {}
 }
 
@@ -156,11 +156,9 @@ const flushPending = async () => {
 
 const saveSyncSince = async () => {
   try {
-    const raw = await invoke('db_get_cluster_config')
-    const cfg = raw ? JSON.parse(raw) : {}
-    cfg.syncSince = syncSince.value || ''
-    await invoke('db_set_cluster_config', { value: JSON.stringify(cfg) })
-    ElMessage.success('同步范围已保存（新事件按新范围同步，历史不回灌）')
+    // cluster.sync_since 为复制键: 集群模式下自动经 Raft 同步到各节点
+    await invoke('db_set_kv', { key: 'cluster.sync_since', value: syncSince.value || '' })
+    ElMessage.success('同步范围已保存' + (clusterStatus.value.enabled ? '（将同步至集群各节点）' : '（新事件按新范围同步，历史不回灌）'))
   } catch (e) {
     ElMessage.error(String(e))
   }
