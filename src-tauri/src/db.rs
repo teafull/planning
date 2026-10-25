@@ -478,6 +478,12 @@ pub struct ClusterState {
     pub flusher_started: std::sync::atomic::AtomicBool,
 }
 
+/// 清空 Raft 持久化状态(退出/重建/换集群加入时调用)。
+/// events/kv 业务数据不受影响; 表不存在(从未跑过 raft)时静默忽略。
+fn wipe_raft_state(conn: &Connection) {
+    let _ = conn.execute_batch("DELETE FROM raft_log; DELETE FROM raft_state;");
+}
+
 /// 启动 30s 周期积压重放(全局单例)
 pub fn spawn_pending_flusher(app: tauri::AppHandle) {
     use std::sync::atomic::Ordering;
@@ -660,6 +666,12 @@ pub async fn cluster_create(
     let token = gen_token();
     let addr = format!("{}:{port}", advertise.unwrap_or_else(lan_ip));
 
+    // 清理旧集群残留的 raft 状态(如未正常退出), 避免 initialize 被拒
+    {
+        let conn = db.0.lock().unwrap();
+        wipe_raft_state(&conn);
+    }
+
     let handle = crate::raft::start_node(1, &db_path, data_dir.join("snapshots"), port, Some(token.clone())).await?;
 
     // initialize 失败 → 关停 Raft 核心, 不留孤儿
@@ -752,6 +764,8 @@ pub async fn cluster_join(
     // 2. 本地先启动(不 initialize)——本地失败时目标侧零残留
     let (db_path, data_dir) = {
         let conn = db.0.lock().unwrap();
+        // 清理旧集群残留 raft 状态(旧 vote 会阻断新集群选主)
+        wipe_raft_state(&conn);
         let p = conn.path().map(|s| s.to_string()).ok_or("无库路径")?;
         let dir = std::path::Path::new(&p).parent().map(|d| d.to_path_buf()).ok_or("无数据目录")?;
         (std::path::PathBuf::from(p), dir)
@@ -949,8 +963,10 @@ async fn shutdown_cluster_local(
         jh.abort();
     }
     *cluster.handle.lock().await = None;
-    // 配置回单机(保留 syncSince 供下次使用); 清空离线队列防跨集群污染
+    // 配置回单机(保留 syncSince 供下次使用); 清空离线队列防跨集群污染;
+    // 清空 raft 持久化状态, 否则下次 initialize 会被残留日志/投票拒绝
     let conn = db.0.lock().unwrap();
+    wipe_raft_state(&conn);
     let _ = crate::raft_cmd::kv_upsert(&conn, "cluster.pending", "[]");
     let _ = crate::raft_cmd::kv_upsert(&conn, "cluster.offline", "0");
     let old: crate::raft::ClusterConfig = crate::raft_cmd::kv_get(&conn, "cluster.config")
