@@ -161,16 +161,16 @@ const emit = defineEmits(['create', 'open', 'resize'])
 }
 
 .all-day-event-list-placeholder {
-  width: 260px;
-  flex: 0 0 260px;
+  width: 300px;
+  flex: 0 0 300px;
   border-left: 1px solid #e0e0e0;
 }
 
 /* 全天事件日期拖拽手柄 */
 .allday-resize-handle {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
+  top: 1px;
+  bottom: 1px;
   width: 7px;
   cursor: ew-resize;
   z-index: 12;
@@ -180,16 +180,16 @@ const emit = defineEmits(['create', 'open', 'resize'])
 .allday-resize-handle::after {
   content: '';
   position: absolute;
-  top: 20%;
-  bottom: 20%;
+  top: 1px;
+  bottom: 1px;
   width: 2px;
-  left: 50%;
-  transform: translateX(-50%);
   border-radius: 1px;
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.85);
   opacity: 0;
   transition: opacity 0.2s;
 }
+.allday-resize-handle.handle-left::after { left: 2px; }
+.allday-resize-handle.handle-right::after { right: 2px; }
 .allday-resize-handle:hover::after { opacity: 1; }
 
 /* 深色模式 */
