@@ -108,9 +108,13 @@ const joinCluster = async () => {
     ElMessage.warning('请填写节点地址与集群令牌')
     return
   }
+  // 只填 IP 时自动补默认端口 7878
+  const target = joinTarget.value.trim().includes(':')
+    ? joinTarget.value.trim()
+    : `${joinTarget.value.trim()}:7878`
   try {
     const res = await invoke('cluster_join', {
-      target: joinTarget.value.trim(),
+      target,
       token: joinToken.value.trim(),
       port: clusterPort.value,
       advertise: advertiseIp.value || null
@@ -556,7 +560,7 @@ const handleDialogClose = (done) => {
             <el-input-number v-model="clusterPort" :min="1024" :max="65535" :controls="false" style="width: 110px" />
             <el-button type="primary" @click="createCluster">创建集群</el-button>
             <el-divider direction="vertical" />
-            <el-input v-model="joinTarget" placeholder="Leader 节点 IP:端口" style="width: 200px" />
+            <el-input v-model="joinTarget" placeholder="Leader 节点 IP:端口(默认 7878)" style="width: 200px" />
             <el-input v-model="joinToken" placeholder="集群令牌" style="width: 130px" maxlength="6" />
             <el-button @click="joinCluster">加入集群</el-button>
           </div>

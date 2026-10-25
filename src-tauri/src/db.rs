@@ -771,6 +771,13 @@ pub async fn cluster_join(
         }
     }
 
+    // 目标未带端口时补默认端口
+    let target = if target.contains(':') {
+        target
+    } else {
+        format!("{target}:7878")
+    };
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()
