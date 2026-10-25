@@ -324,6 +324,55 @@ pub fn apply_command(conn: &Connection, cmd: &RaftCommand) -> Result<(), String>
     }
 }
 
+// ---------- 全量入库(集群初始同步) ----------
+
+/// 将本地全部(或时间范围内)事件直接提议进 Raft 日志。
+/// 用于: 集群创建时(历史数据入日志) / 加入方追平后(本地独有数据入库)。
+/// 跳过 diff(因为目标不是"变更"而是"让日志知道这些数据")。
+pub fn collect_local_events_for_proposal(conn: &Connection) -> Result<Vec<RaftCommand>, String> {
+    let since = sync_since(conn);
+    let mut stmt = conn
+        .prepare("SELECT id, date, end_date, start_time, end_time, title, event_type, description, is_all_day FROM events WHERE deleted = 0")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            Ok(serde_json::json!({
+                "id": id.parse::<i64>().map(|n| serde_json::json!(n)).unwrap_or(serde_json::json!(id)),
+                "date": row.get::<_, String>(1)?,
+                "endDate": row.get::<_, Option<String>>(2)?,
+                "startTime": row.get::<_, Option<f64>>(3)?,
+                "endTime": row.get::<_, Option<f64>>(4)?,
+                "title": row.get::<_, String>(5)?,
+                "type": row.get::<_, String>(6)?,
+                "description": row.get::<_, String>(7)?,
+                "isAllDay": row.get::<_, i64>(8)? != 0,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut events = Vec::new();
+    for r in rows {
+        let ev = r.map_err(|e| e.to_string())?;
+        // 时间范围过滤
+        if let Some(s) = &since {
+            let d = ev.get("date").and_then(|v| v.as_str()).unwrap_or("");
+            if d < s.as_str() { continue; }
+        }
+        events.push(ev);
+    }
+
+    if events.is_empty() {
+        return Ok(vec![]);
+    }
+    // 按批拆分(每批100条, 避免单条日志过大)
+    let mut cmds = Vec::new();
+    for chunk in events.chunks(100) {
+        cmds.push(RaftCommand::UpsertEvents { events: chunk.to_vec() });
+    }
+    Ok(cmds)
+}
+
 // ---------- 离线积压对账(快照恢复保护) ----------
 
 /// 快照恢复后对账 pending 队列:

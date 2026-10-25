@@ -738,6 +738,23 @@ pub async fn cluster_create(
         return Err(e);
     }
 
+    // 历史数据全量入库: 把本地所有事件写入 Raft 日志,
+    // 加入方通过日志复制即可获得全部历史(否则历史永远不同步)
+    let hist_cmds = {
+        let conn = db.0.lock().unwrap();
+        crate::raft_cmd::collect_local_events_for_proposal(&conn)?
+    }; // guard 在此释放, 后续 await 安全
+    if !hist_cmds.is_empty() {
+        let hist_handle = handle.clone();
+        for cmd in &hist_cmds {
+            if let Err(e) = hist_handle.raft.client_write(cmd.clone()).await {
+                let _ = handle.raft.shutdown().await;
+                return Err(format!("历史数据入库失败: {e}"));
+            }
+        }
+        tracing::info!("[集群] 历史数据入库完成: {} 条命令", hist_cmds.len());
+    }
+
     // HTTP 服务最后启动; 失败关停 Raft(端口未占用, 无需 abort)
     let handle_with_token = handle;
     let jh = match crate::raft::server::start_server(handle_with_token.clone()).await {
@@ -882,9 +899,13 @@ pub async fn cluster_join(
     }
     *cluster.handle.lock().await = Some(handle.clone());
 
-    // 4. 追平后自动请求转正(重试至多12次, 已成为投票者则提前完成)
+    // 4. 追平后: ①请求转正 ②本地历史数据重扫入库(本机独有的历史事件同步给集群)
     let t = target.clone();
     let promote_handle = handle.clone();
+    let join_app = app.clone();
+    let join_db_path = db_path.clone();
+    let rescan_raft = handle.raft.clone();
+    let rescan_node_id = handle.node_id;
     tokio::spawn(async move {
         let c = reqwest::Client::new();
         for _ in 0..12 {
@@ -911,6 +932,36 @@ pub async fn cluster_join(
             }
         }
         tracing::warn!("[集群] 自动转正未完成, 可稍后手动重试加入");
+    });
+
+    // 5. 本地独有历史数据入库(等待转正/追平后执行, 确保写入有仲裁)
+    let rescan_app = join_app;
+    let rescan_db = join_db_path;
+    tokio::spawn(async move {
+        // 等待成为投票者或超时(60s)
+        for _ in 0..60 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let is_voter = crate::raft::metrics_snapshot(&rescan_raft)
+                .membership_config
+                .nodes()
+                .any(|(id, _)| *id == rescan_node_id);
+            if is_voter { break; }
+        }
+        // 重扫: 把本地独有事件提议进集群
+        let conn = match rusqlite::Connection::open(&rescan_db) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let cmds = match crate::raft_cmd::collect_local_events_for_proposal(&conn) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        if cmds.is_empty() { return; }
+        for cmd in &cmds {
+            let _ = rescan_raft.client_write(cmd.clone()).await;
+        }
+        tracing::info!("[集群] 加入方历史数据重扫入库: {} 条命令", cmds.len());
+        let _ = rescan_app;
     });
 
     Ok(serde_json::json!({ "nodeId": my_id, "addr": addr }))
