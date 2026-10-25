@@ -223,14 +223,19 @@ const getDayEventsForRender = (day) => {
   })
 }
 
-// 本周事件列表（右侧栏）
+// 本周事件列表（右侧栏）：与本周相交的事件各计一次（跨天全天事件不重复）
 const weekEvents = computed(() => {
-  const result = []
-  weekDays.value.forEach(day => {
-    const dayEvents = getEventsByDay(day)
-    dayEvents.forEach(event => result.push(event))
-  })
-  return result.sort((a, b) => {
+  const weekDateStrings = weekDays.value.map(day => formatDateLocal(day))
+  return events.value.filter(event => {
+    if (event.isAllDay) {
+      const eventStart = new Date(event.date)
+      const eventEnd = new Date(event.endDate || event.date)
+      const weekStart = new Date(weekDateStrings[0])
+      const weekEnd = new Date(weekDateStrings[6])
+      return eventEnd >= weekStart && eventStart <= weekEnd
+    }
+    return weekDateStrings.includes(event.date)
+  }).sort((a, b) => {
     if (a.date !== b.date) return a.date.localeCompare(b.date)
     if (a.isAllDay && !b.isAllDay) return -1
     if (!a.isAllDay && b.isAllDay) return 1

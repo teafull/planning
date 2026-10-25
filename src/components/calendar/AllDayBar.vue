@@ -201,8 +201,20 @@ html.dark .all-day-time-header {
   background: #232323;
   border-right-color: #3a3a3a;
 }
+html.dark .all-day-days-container {
+  background: transparent;
+}
+html.dark .all-day-label {
+  color: #9ca3af;
+}
+html.dark .all-day-events-row {
+  border-color: #333;
+}
 html.dark .all-day-day-cell {
   border-right-color: #333;
+}
+html.dark .all-day-day-cell:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 html.dark .all-day-day-cell.today {
   background: rgba(59, 130, 246, 0.15);

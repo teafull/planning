@@ -60,6 +60,7 @@ pub struct ClusterConfig {
 /// 此处以 catch_unwind + 重试兼容(实际触发概率极低, 触发时重试即成功)。
 pub fn metrics_snapshot(raft: &Raft<TypeConfig>) -> openraft::RaftMetrics<NodeId, BasicNode> {
     let rx = raft.metrics();
+    let mut spins: u32 = 0;
     loop {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             rx.borrow().clone()
@@ -67,7 +68,13 @@ pub fn metrics_snapshot(raft: &Raft<TypeConfig>) -> openraft::RaftMetrics<NodeId
         if let Ok(m) = r {
             return m;
         }
-        std::thread::yield_now();
+        spins += 1;
+        if spins < 100 {
+            std::thread::yield_now();
+        } else {
+            // 持续冲突(理论场景): 退化为短睡眠, 避免热自旋
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
 }
 
@@ -177,10 +184,28 @@ mod tests {
         let n1 = start_node(1, &db1, db1.parent().unwrap().join("snap"), 17801, Some("e2e-token".into()))
             .await
             .unwrap();
+
         let mut m = std::collections::BTreeMap::new();
         m.insert(1u64, BasicNode { addr: "127.0.0.1:17801".into() });
         n1.raft.initialize(m).await.unwrap();
         server::start_server(n1.clone()).await.unwrap();
+        // 负向鉴权: 无令牌/错误令牌访问管理端口应 401
+        {
+            let no_token = reqwest::Client::new()
+                .get("http://127.0.0.1:17801/cluster/status")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(no_token.status(), 401, "无令牌应被拒绝");
+            let bad = reqwest::Client::new()
+                .post("http://127.0.0.1:17801/raft/vote")
+                .header("x-cluster-token", "WRONG")
+                .json(&serde_json::json!({ "vote": { "leader_id": { "term": 1, "node_id": 9 }, "committed": false }, "last_log_id": null }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(bad.status(), 401, "错误令牌应被拒绝");
+        }
 
         // 节点2/3: 启动(不初始化), 由 leader 添加为 learner
         let n2 = start_node(2, &db2, db2.parent().unwrap().join("snap"), 17802, Some("e2e-token".into()))

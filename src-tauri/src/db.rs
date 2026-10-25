@@ -354,15 +354,15 @@ pub async fn db_save_events(
         }
 
         if is_offline_mode(&conn) {
-            // 离线模式: 本地立即生效 + 命令入队待重连重放
+            // 离线模式: 本地立即生效 + 命令入队(同一事务, 崩溃时不产生半状态)
             let tx = conn.transaction().map_err(|e| e.to_string())?;
             for cmd in routed.iter_all() {
                 apply_command(&tx, cmd)?;
             }
-            tx.commit().map_err(|e| e.to_string())?;
             for cmd in &routed.cluster {
-                pending_push(&conn, cmd)?;
+                pending_push(&tx, cmd)?;
             }
+            tx.commit().map_err(|e| e.to_string())?;
             return Ok(());
         }
 
@@ -421,11 +421,13 @@ pub async fn db_set_kv(
 
     // 集群模式
     let offline = {
-        let conn = db.0.lock().unwrap();
+        let mut conn = db.0.lock().unwrap();
         let off = is_offline_mode(&conn);
         if off {
-            apply_command(&conn, &cmd)?;
-            pending_push(&conn, &cmd)?;
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            apply_command(&tx, &cmd)?;
+            pending_push(&tx, &cmd)?;
+            tx.commit().map_err(|e| e.to_string())?;
         }
         off
     };
@@ -752,21 +754,7 @@ pub async fn cluster_join(
     let my_id = max_id + 1;
     let addr = format!("{}:{port}", advertise.unwrap_or_else(lan_ip));
 
-    // 2. 登记为目标 learner
-    let join_resp: Value = client
-        .post(format!("http://{target}/cluster/join"))
-        .json(&serde_json::json!({ "token": token, "raftId": my_id, "addr": addr }))
-        .send()
-        .await
-        .map_err(|e| format!("加入请求失败: {e}"))?
-        .json()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !join_resp["ok"].as_bool().unwrap_or(false) {
-        return Err(join_resp["msg"].as_str().unwrap_or("加入失败").to_string());
-    }
-
-    // 3. 本地启动(不 initialize, 由 leader 以 learner 身份同步)
+    // 2. 本地先启动(不 initialize)——本地失败时目标侧零残留
     let (db_path, data_dir) = {
         let conn = db.0.lock().unwrap();
         let p = conn.path().map(|s| s.to_string()).ok_or("无库路径")?;
@@ -774,7 +762,41 @@ pub async fn cluster_join(
         (std::path::PathBuf::from(p), dir)
     };
     let handle = crate::raft::start_node(my_id, &db_path, data_dir.join("snapshots"), port, Some(token.clone())).await?;
-    let jh = crate::raft::server::start_server(handle.clone()).await?;
+    let jh = match crate::raft::server::start_server(handle.clone()).await {
+        Ok(jh) => jh,
+        Err(e) => {
+            let _ = handle.raft.shutdown().await;
+            return Err(e);
+        }
+    };
+
+    // 3. 登记为目标 learner; 失败则关停本地, 不留孤儿成员
+    let mut join_failed: Option<String> = None;
+    let join_resp: Value = match client
+        .post(format!("http://{target}/cluster/join"))
+        .json(&serde_json::json!({ "token": token, "raftId": my_id, "addr": addr }))
+        .send()
+        .await
+    {
+        Ok(r) => match r.json::<Value>().await {
+            Ok(v) => v,
+            Err(e) => {
+                join_failed = Some(format!("解析加入响应失败: {e}"));
+                Value::Null
+            }
+        },
+        Err(e) => {
+            join_failed = Some(format!("加入请求失败: {e}"));
+            Value::Null
+        }
+    };
+    if join_failed.is_some() || !join_resp["ok"].as_bool().unwrap_or(false) {
+        jh.abort();
+        let _ = handle.raft.shutdown().await;
+        return Err(join_failed.unwrap_or_else(|| {
+            join_resp["msg"].as_str().unwrap_or("加入失败").to_string()
+        }));
+    }
     *cluster.server_task.lock().await = Some(jh);
     spawn_pending_flusher(app.clone());
 
@@ -823,7 +845,7 @@ pub async fn cluster_join(
                 return;
             }
         }
-        eprintln!("[集群] 自动转正未完成, 可稍后手动重试加入");
+        tracing::warn!("[集群] 自动转正未完成, 可稍后手动重试加入");
     });
 
     Ok(serde_json::json!({ "nodeId": my_id, "addr": addr }))
@@ -1058,7 +1080,7 @@ pub async fn auto_start_cluster(app: tauri::AppHandle) {
             Ok(jh) => {
                 *cluster.server_task.lock().await = Some(jh);
                 *cluster.handle.lock().await = Some(handle);
-                println!("[集群] 已按配置自动重启: node={node_id} port={port}");
+                tracing::info!("[集群] 已按配置自动重启: node={node_id} port={port}");
             }
             Err(e) => eprintln!("[集群] 服务启动失败: {e}"),
         },

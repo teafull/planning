@@ -90,7 +90,7 @@ pub fn run() {
     tauri::Builder::default().setup(|app| {
         // 初始化 SQLite 存储(失败不阻塞窗口, 前端命令会报错)
         if let Err(e) = db::init(app.handle()) {
-            eprintln!("数据库初始化失败: {e}");
+            tracing::error!("数据库初始化失败: {e}");
         }
         app.manage(db::ClusterState::default());
         // 按持久化配置自动重连集群(异步, 不阻塞窗口)
