@@ -784,15 +784,21 @@ pub async fn cluster_join(
         .map_err(|e| e.to_string())?;
 
     // 1. 查询目标状态分配新 raft_id
-    let status: Value = client
+    let status_resp = client
         .get(format!("http://{target}/cluster/status"))
         .header("x-cluster-token", &token)
         .send()
         .await
-        .map_err(|e| format!("无法连接 {target}: {e}"))?
-        .json()
-        .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("无法连接 {target}: {e} (请确认对方已创建集群且防火墙放行)"))?;
+    let status_code = status_resp.status();
+    let status_text = status_resp.text().await.unwrap_or_default();
+    if !status_code.is_success() {
+        return Err(format!(
+            "查询对方状态失败({status_code}): {status_text} (401=令牌错误; 404=对方版本过旧无此接口)"
+        ));
+    }
+    let status: Value = serde_json::from_str(&status_text)
+        .map_err(|_| format!("对方状态响应非 JSON(疑似版本不匹配): {status_text}"))?;
     let max_id = status["membership"]
         .as_array()
         .map(|a| a.iter().filter_map(|m| m["raftId"].as_u64()).max().unwrap_or(0))
@@ -826,13 +832,24 @@ pub async fn cluster_join(
         .send()
         .await
     {
-        Ok(r) => match r.json::<Value>().await {
-            Ok(v) => v,
-            Err(e) => {
-                join_failed = Some(format!("解析加入响应失败: {e}"));
+        Ok(r) => {
+            let code = r.status();
+            let text = r.text().await.unwrap_or_default();
+            if !code.is_success() {
+                join_failed = Some(format!("加入被拒绝({code}): {text}"));
                 Value::Null
+            } else {
+                match serde_json::from_str::<Value>(&text) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        join_failed = Some(format!(
+                            "对方响应非 JSON(疑似版本不匹配): {text}"
+                        ));
+                        Value::Null
+                    }
+                }
             }
-        },
+        }
         Err(e) => {
             join_failed = Some(format!("加入请求失败: {e}"));
             Value::Null
