@@ -738,6 +738,7 @@ pub async fn cluster_join(
     // 1. 查询目标状态分配新 raft_id
     let status: Value = client
         .get(format!("http://{target}/cluster/status"))
+        .header("x-cluster-token", &token)
         .send()
         .await
         .map_err(|e| format!("无法连接 {target}: {e}"))?

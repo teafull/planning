@@ -88,12 +88,32 @@ pub struct GenericResponse {
     pub msg: String,
 }
 
-// ---------- raft RPC(错误以 500 返回, 调用方视作 Unreachable) ----------
+// ---------- raft RPC(错误以 5xx/401 返回, 调用方视作 Unreachable) ----------
+
+/// Raft RPC 令牌校验: 请求头 x-cluster-token 与本集群令牌一致才放行
+fn rpc_authorized(handle: &std::sync::Arc<RaftHandle>, headers: &axum::http::HeaderMap) -> bool {
+    match &handle.cluster_token {
+        Some(expect) => headers
+            .get("x-cluster-token")
+            .and_then(|v| v.to_str().ok())
+            .map(|got| got == expect)
+            .unwrap_or(false),
+        None => false, // 无令牌的节点不接受任何 RPC
+    }
+}
+
+fn unauthorized() -> (axum::http::StatusCode, String) {
+    (axum::http::StatusCode::UNAUTHORIZED, "集群令牌错误".to_string())
+}
 
 async fn append_entries(
     State(app): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(rpc): Json<AppendEntriesRequest<TypeConfig>>,
 ) -> Result<Json<AppendEntriesResponse<NodeId>>, (axum::http::StatusCode, String)> {
+    if !rpc_authorized(&app.handle, &headers) {
+        return Err(unauthorized());
+    }
     app.handle
         .raft
         .append_entries(rpc)
@@ -104,8 +124,12 @@ async fn append_entries(
 
 async fn vote(
     State(app): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(rpc): Json<VoteRequest<NodeId>>,
 ) -> Result<Json<VoteResponse<NodeId>>, (axum::http::StatusCode, String)> {
+    if !rpc_authorized(&app.handle, &headers) {
+        return Err(unauthorized());
+    }
     app.handle
         .raft
         .vote(rpc)
@@ -116,8 +140,12 @@ async fn vote(
 
 async fn install_snapshot(
     State(app): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(rpc): Json<InstallSnapshotRequest<TypeConfig>>,
 ) -> Result<Json<InstallSnapshotResponse<NodeId>>, (axum::http::StatusCode, String)> {
+    if !rpc_authorized(&app.handle, &headers) {
+        return Err(unauthorized());
+    }
     app.handle
         .raft
         .install_snapshot(rpc)
@@ -204,14 +232,20 @@ async fn cluster_propose(
     }
 }
 
-async fn cluster_status(State(app): State<AppState>) -> Json<serde_json::Value> {
+async fn cluster_status(
+    State(app): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+    if !rpc_authorized(&app.handle, &headers) {
+        return Err(unauthorized());
+    }
     let metrics = crate::raft::metrics_snapshot(&app.handle.raft);
     let members: Vec<serde_json::Value> = metrics
         .membership_config
         .nodes()
         .map(|(id, n)| serde_json::json!({ "raftId": id, "addr": n.addr }))
         .collect();
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "nodeId": app.handle.node_id,
         "state": format!("{:?}", metrics.state),
         "currentTerm": metrics.current_term,
@@ -220,7 +254,7 @@ async fn cluster_status(State(app): State<AppState>) -> Json<serde_json::Value> 
         "membership": members,
         "lastApplied": metrics.last_applied.map(|l| l.index),
         "lastLogIndex": metrics.last_log_index,
-    }))
+    })))
 }
 
 pub async fn start_server(

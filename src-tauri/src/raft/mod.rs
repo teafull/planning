@@ -97,7 +97,7 @@ pub async fn start_node(
     let raft = Raft::new(
         node_id,
         Arc::new(raft_config()),
-        network::HttpNetworkFactory::default(),
+        network::HttpNetworkFactory::new(cluster_token.clone()),
         log_store,
         sm_store,
     )
@@ -174,7 +174,7 @@ mod tests {
         let db3 = temp_db("n3");
 
         // 节点1: 创建单节点集群
-        let n1 = start_node(1, &db1, db1.parent().unwrap().join("snap"), 17801, None)
+        let n1 = start_node(1, &db1, db1.parent().unwrap().join("snap"), 17801, Some("e2e-token".into()))
             .await
             .unwrap();
         let mut m = std::collections::BTreeMap::new();
@@ -183,11 +183,11 @@ mod tests {
         server::start_server(n1.clone()).await.unwrap();
 
         // 节点2/3: 启动(不初始化), 由 leader 添加为 learner
-        let n2 = start_node(2, &db2, db2.parent().unwrap().join("snap"), 17802, None)
+        let n2 = start_node(2, &db2, db2.parent().unwrap().join("snap"), 17802, Some("e2e-token".into()))
             .await
             .unwrap();
         server::start_server(n2.clone()).await.unwrap();
-        let n3 = start_node(3, &db3, db3.parent().unwrap().join("snap"), 17803, None)
+        let n3 = start_node(3, &db3, db3.parent().unwrap().join("snap"), 17803, Some("e2e-token".into()))
             .await
             .unwrap();
         server::start_server(n3.clone()).await.unwrap();

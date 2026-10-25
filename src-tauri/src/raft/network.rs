@@ -12,11 +12,20 @@ use std::time::Duration;
 use super::{NodeId, TypeConfig};
 
 #[derive(Clone, Default)]
-pub struct HttpNetworkFactory;
+pub struct HttpNetworkFactory {
+    token: Option<String>,
+}
+
+impl HttpNetworkFactory {
+    pub fn new(token: Option<String>) -> Self {
+        Self { token }
+    }
+}
 
 pub struct HttpNetwork {
     base_url: String,
     client: reqwest::Client,
+    token: Option<String>,
 }
 
 impl RaftNetworkFactory<TypeConfig> for HttpNetworkFactory {
@@ -29,6 +38,7 @@ impl RaftNetworkFactory<TypeConfig> for HttpNetworkFactory {
                 .timeout(Duration::from_secs(8))
                 .build()
                 .expect("reqwest client"),
+            token: self.token.clone(),
         }
     }
 }
@@ -45,9 +55,11 @@ impl HttpNetwork {
         timeout: Duration,
     ) -> Result<Res, String> {
         let url = format!("http://{}/raft/{path}", self.base_url);
-        self.client
-            .post(&url)
-            .json(body)
+        let mut req = self.client.post(&url).json(body);
+        if let Some(t) = &self.token {
+            req = req.header("x-cluster-token", t);
+        }
+        req
             .timeout(timeout)
             .send()
             .await
