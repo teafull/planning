@@ -172,8 +172,6 @@ pub fn run() {
             db::db_get_data_dir,
             db::db_set_data_dir,
             db::db_get_node_id,
-            db::db_get_cluster_config,
-            db::db_set_cluster_config,
             db::cluster_create,
             db::cluster_join,
             db::cluster_status,

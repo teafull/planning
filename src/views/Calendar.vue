@@ -543,10 +543,17 @@ const testReminder = async () => {
   await sendEventReminder({ title: '测试提醒', type: 'reminder', description: '这是一个测试提醒' })
 }
 
+const notifiedDate = ref('')
+
 const checkReminders = () => {
   if (!reminderEnabled.value) return
   const now = new Date()
   const todayStr = formatDateLocal(now)
+  // 跨天清理通知去重记录, 防无界增长
+  if (notifiedDate.value !== todayStr) {
+    notifiedEvents.value.clear()
+    notifiedDate.value = todayStr
+  }
   const currentTime = now.getHours() + now.getMinutes() / 60
 
   events.value.forEach(event => {

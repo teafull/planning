@@ -466,23 +466,6 @@ pub fn db_get_node_id(db: tauri::State<Db>) -> Result<String, String> {
     kv_get(&conn, "node.id")?.ok_or_else(|| "节点身份缺失".to_string())
 }
 
-#[tauri::command]
-pub fn db_get_cluster_config(db: tauri::State<Db>) -> Result<Option<String>, String> {
-    let conn = db.0.lock().unwrap();
-    kv_get(&conn, "cluster.config")
-}
-
-/// 设置集群配置(经命令路径, 未来随 Raft 复制)。要求合法 JSON。
-#[tauri::command]
-pub fn db_set_cluster_config(
-    db: tauri::State<Db>,
-    value: String,
-) -> Result<(), String> {
-    let parsed: Value = serde_json::from_str(&value).map_err(|e| format!("非法 JSON: {e}"))?;
-    let conn = db.0.lock().unwrap();
-    apply_command(&conn, &RaftCommand::SetClusterConfig { value: parsed })
-}
-
 // ---------- 集群管理(Raft 第2期) ----------
 
 /// 集群运行状态(Tauri State 管理)
@@ -678,21 +661,17 @@ pub async fn cluster_create(
     let addr = format!("{}:{port}", advertise.unwrap_or_else(lan_ip));
 
     let handle = crate::raft::start_node(1, &db_path, data_dir.join("snapshots"), port, Some(token.clone())).await?;
+
+    // initialize 失败 → 关停 Raft 核心, 不留孤儿
     let mut members = std::collections::BTreeMap::new();
     members.insert(1u64, openraft::BasicNode { addr: addr.clone() });
-    handle
-        .raft
-        .initialize(members)
-        .await
-        .map_err(|e| format!("初始化失败: {e}"))?;
+    if let Err(e) = handle.raft.initialize(members).await {
+        let _ = handle.raft.shutdown().await;
+        return Err(format!("初始化失败: {e}"));
+    }
 
-    let handle_with_token = handle;
-    let jh = crate::raft::server::start_server(handle_with_token.clone()).await?;
-    *cluster.server_task.lock().await = Some(jh);
-    spawn_pending_flusher(app.clone());
-
-    // 持久化配置(保留已有 syncSince)
-    {
+    // 持久化配置(保留已有 syncSince) —— 先于服务启动, 失败仅需关停 Raft
+    let persist: Result<(), String> = (|| {
         let conn = db.0.lock().unwrap();
         let old: crate::raft::ClusterConfig = kv_get(&conn, "cluster.config")
             .ok()
@@ -708,8 +687,24 @@ pub async fn cluster_create(
         };
         kv_upsert(&conn, "cluster.config", &serde_json::to_string(&cfg).map_err(|e| e.to_string())?)?;
         kv_upsert(&conn, "node.raft_id", "1")?;
+        Ok(())
+    })();
+    if let Err(e) = persist {
+        let _ = handle.raft.shutdown().await;
+        return Err(e);
     }
 
+    // HTTP 服务最后启动; 失败关停 Raft(端口未占用, 无需 abort)
+    let handle_with_token = handle;
+    let jh = match crate::raft::server::start_server(handle_with_token.clone()).await {
+        Ok(jh) => jh,
+        Err(e) => {
+            let _ = handle_with_token.raft.shutdown().await;
+            return Err(e);
+        }
+    };
+    *cluster.server_task.lock().await = Some(jh);
+    spawn_pending_flusher(app.clone());
     *cluster.handle.lock().await = Some(handle_with_token.clone());
     Ok(serde_json::json!({ "token": token, "nodeId": 1, "addr": addr }))
 }
