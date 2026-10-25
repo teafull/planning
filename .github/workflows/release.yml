@@ -1,0 +1,68 @@
+name: Release
+
+# 推送 v* 标签时触发: 三平台并行构建, 产物自动挂到 GitHub Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # 创建 Release 与上传产物
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false # 单平台失败不影响其他平台
+      matrix:
+        include:
+          - platform: 'macos-latest' # Apple Silicon (aarch64)
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest' # Intel (x86_64)
+            args: '--target x86_64-apple-darwin'
+          - platform: 'ubuntu-22.04' # Linux (glibc 稳定版基础)
+            args: ''
+          - platform: 'windows-latest' # Windows x64
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: 安装 Rust 稳定版
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust 缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: 安装 Linux 系统依赖 (webkit2gtk 等)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libgtk-3-dev
+
+      - name: 安装前端依赖
+        run: npm ci
+
+      - name: 构建并发布 (tauri-action)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Planning ${{ github.ref_name }}'
+          releaseBody: '请查看 [CHANGELOG](https://github.com/teafull/planning/commits/master) 或对应 tag 说明。'
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
