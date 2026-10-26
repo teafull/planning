@@ -11,9 +11,9 @@ import { initStores } from './store/init'
 import { initRaftListener } from './store/events'
 import { initTheme } from './store/theme'
 
-// 先水合存储(SQLite + 旧数据迁移)与主题, 再挂载应用
-initStores().then(async () => {
-  await initRaftListener()
+// 先注册 raft 事件监听（在集群启动前, 防丢失启动窗口期的复制事件）,
+// 再水合存储与主题, 最后挂载应用
+initRaftListener().then(() => initStores()).then(() => {
   initTheme()
   createApp(App).use(ElementPlus, {
     locale: zhCn

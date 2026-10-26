@@ -12,11 +12,25 @@ let hydrated = false
 let saveTimer = null
 let lastErrorToast = 0
 let inflight = null
+let needsReload = false
 
-/// 加载事件(单飞: 并发调用共享同一次请求)。
-/// 视图 onMounted 重复加载是有意为之——集群模式下用于给其他节点的复制变更。
-export const loadEvents = () => {
-  if (inflight) return inflight
+/// 加载事件。force=true 时绕过单飞：
+/// 如果当前有请求在飞, 等它完成后追加一次全新加载。
+/// 用于 raft-applied（确保读到最新数据）和手动刷新。
+export const loadEvents = (force = false) => {
+  if (inflight) {
+    if (force) {
+      // 标记需要重载, 当前请求完成后自动追加
+      needsReload = true
+      return inflight.then(() => {
+        if (needsReload) {
+          needsReload = false
+          return loadEvents(true)
+        }
+      })
+    }
+    return inflight
+  }
   inflight = (async () => {
     try {
       const rows = await invoke('db_get_events')
@@ -60,7 +74,7 @@ const scheduleSave = () => {
 
 watch(events, scheduleSave, { deep: true })
 
-// 集群复制应用后自动刷新(300ms 防抖合并突发)
+// 集群复制应用后自动刷新(300ms 防抖合并突发, 强制绕过单飞防竞态)
 let raftListenerReady = false
 let raftRefreshTimer = null
 export const initRaftListener = async () => {
@@ -68,7 +82,7 @@ export const initRaftListener = async () => {
   raftListenerReady = true
   await listen('raft-applied', () => {
     clearTimeout(raftRefreshTimer)
-    raftRefreshTimer = setTimeout(() => loadEvents(), 300)
+    raftRefreshTimer = setTimeout(() => loadEvents(true), 300)
   })
 }
 
