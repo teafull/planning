@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """
-3 节点全流程自动化测试
+3 节点全流程自动化测试(含 CRUD + 类型变更 + 时间调整 + 删除)
 用法: python3 scripts/e2e-3node.py
-
-前提: cargo build 已完成
-流程: 启动 3 实例(--bootstrap 组集群) → 各节点创建事件 → 验证同步 → 清理
 """
 import subprocess, time, requests, json, os, sys, shutil, atexit
 
@@ -12,12 +9,21 @@ TEST_DIR = "/tmp/raft-e2e"
 TOKEN = "e2eauto123"
 BASE_PORT = 7878
 processes = []
+passed = 0
+failed = 0
+
+def ok(name):
+    global passed; passed += 1
+    print(f"  ✅ {name}")
+
+def fail(name, detail=""):
+    global failed; failed += 1
+    print(f"  ❌ {name}  {detail}")
 
 def find_binary():
     for c in ["src-tauri/target/debug/planning",
               os.path.expanduser("~/Desktop/zhangfeng/planning/src-tauri/target/debug/planning")]:
-        if os.path.exists(c):
-            return os.path.abspath(c)
+        if os.path.exists(c): return os.path.abspath(c)
     print("❌ cargo build 先"); sys.exit(1)
 
 def cleanup():
@@ -27,82 +33,94 @@ def cleanup():
     shutil.rmtree(TEST_DIR, ignore_errors=True)
 
 def start_leader():
-    """节点1: --bootstrap 创建集群"""
     d = f"{TEST_DIR}/n1"; port = BASE_PORT
     os.makedirs(d, exist_ok=True)
     print(f"  节点1: port={port} bootstrap")
     p = subprocess.Popen(
         [BINARY, "--data-dir", d, "--port", str(port),
          "--bootstrap", "--token", TOKEN],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
         start_new_session=True)
     processes.append(p)
-    # 等 HTTP 就绪
     for _ in range(30):
         time.sleep(1)
         try:
             r = requests.get(f"http://127.0.0.1:{port}/cluster/status",
                            headers={"x-cluster-token": TOKEN}, timeout=2)
             if r.status_code == 200:
-                print(f"  ✓ Leader 就绪 (port={port})")
-                return port
+                print(f"  ✓ Leader 就绪"); return port
         except: pass
-    print("  ❌ Leader 启动超时"); sys.exit(1)
+    print("  ❌ Leader 超时"); sys.exit(1)
 
 def start_follower(n):
-    """节点 n: 先起应用, 再通过 HTTP join"""
     d = f"{TEST_DIR}/n{n}"; port = BASE_PORT + n - 1
     os.makedirs(d, exist_ok=True)
     print(f"  节点{n}: port={port} joining...")
     p = subprocess.Popen(
         [BINARY, "--data-dir", d, "--port", str(port)],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
         start_new_session=True)
     processes.append(p)
-    time.sleep(3)  # 等应用启动
-
-    # 通过 Leader 的 /cluster/join 接口加入
+    time.sleep(3)
     r = requests.post(f"http://127.0.0.1:{BASE_PORT}/cluster/join",
                       json={"token": TOKEN, "raftId": n,
                             "addr": f"127.0.0.1:{port}"}, timeout=5)
     if r.status_code != 200 or not r.json().get("ok"):
-        print(f"  ❌ 节点{n} join 失败: {r.text}"); sys.exit(1)
+        print(f"  ❌ join 失败: {r.text}"); sys.exit(1)
     print(f"  ✓ 节点{n} 已加入")
-
-    # 提升为投票成员
     time.sleep(2)
-    r = requests.post(f"http://127.0.0.1:{BASE_PORT}/cluster/promote",
-                      json={"raftId": n, "token": TOKEN}, timeout=5)
-    if r.status_code == 200:
-        print(f"  ✓ 节点{n} 已提升")
+    requests.post(f"http://127.0.0.1:{BASE_PORT}/cluster/promote",
+                  json={"raftId": n, "token": TOKEN}, timeout=5)
     time.sleep(2)
     return port
 
-def create_event(port, title, date="2026-12-25"):
-    """在指定节点创建事件"""
+# ===== HTTP helpers =====
+
+def create_event(port, title, date="2026-12-25", start=9.0, end=10.0, ev_type="meeting"):
     r = requests.post(f"http://127.0.0.1:{port}/test/create-event",
                       json={"token": TOKEN, "date": date,
-                            "startTime": 9.0, "endTime": 10.0,
-                            "title": title, "eventType": "meeting"},
-                      timeout=5)
+                            "startTime": start, "endTime": end,
+                            "title": title, "eventType": ev_type}, timeout=5)
+    return r.json().get("ok", False)
+
+def update_event(port, event_id, **kwargs):
+    body = {"token": TOKEN, "id": event_id}
+    body.update(kwargs)
+    r = requests.post(f"http://127.0.0.1:{port}/test/update-event",
+                      json=body, timeout=5)
+    return r.json().get("ok", False)
+
+def delete_event(port, event_id):
+    r = requests.post(f"http://127.0.0.1:{port}/test/delete-event",
+                      json={"token": TOKEN, "id": event_id}, timeout=5)
     return r.json().get("ok", False)
 
 def get_events(port):
-    """获取指定节点的全部事件"""
     r = requests.get(f"http://127.0.0.1:{port}/test/events",
                      params={"token": TOKEN}, timeout=5)
-    data = r.json()
-    return data.get("events", [])
+    return r.json().get("events", [])
 
-def wait_sync(port, expected_count, timeout=15):
-    """等待指定节点事件数达到预期"""
+def find_event(port, title):
+    for e in get_events(port):
+        if e.get("title") == title:
+            return e
+    return None
+
+def wait_condition(port, fn, timeout=15):
     start = time.time()
     while time.time() - start < timeout:
-        events = get_events(port)
-        if len(events) >= expected_count:
+        if fn(get_events(port)):
             return True
         time.sleep(1)
     return False
+
+def assert_all_nodes(name, ports, fn, timeout=15):
+    """断言所有节点满足条件"""
+    for i, port in enumerate(ports, 1):
+        if wait_condition(port, fn, timeout):
+            ok(f"{name} → 节点{i}")
+        else:
+            fail(f"{name} → 节点{i}(port={port})", "超时")
 
 def main():
     global BINARY
@@ -116,58 +134,142 @@ def main():
     if os.path.exists(TEST_DIR):
         shutil.rmtree(TEST_DIR, ignore_errors=True)
 
-    # 1. 组集群
-    print("\n[1/4] 启动集群")
-    leader_port = start_leader()
+    # ===== Phase 1: 组集群 =====
+    print("\n[Phase 1] 启动集群")
+    p1 = start_leader()
     p2 = start_follower(2)
     p3 = start_follower(3)
+    ports = [p1, p2, p3]
     time.sleep(3)
 
-    # 2. 各节点创建事件
-    print("\n[2/4] 创建事件(各节点独立创建)")
-    tests = [
-        (leader_port, "leader-created-meeting"),
-        (p2, "follower2-created-task"),
-        (p3, "follower3-created-deadline"),
+    # ===== Phase 2: 创建(多类型) =====
+    print("\n[Phase 2] 创建事件(各节点+多类型)")
+    creates = [
+        (p1, "task-from-leader", "task", 9.0, 10.0),
+        (p2, "meeting-from-f2", "meeting", 14.0, 15.5),
+        (p3, "deadline-from-f3", "deadline", 8.0, 8.5),
+        (p1, "study-multi-hour", "study", 10.0, 12.5),
+        (p2, "vacation-allday-test", "vacation", 0.0, 0.0),
     ]
-    for port, title in tests:
-        ok = create_event(port, title)
-        status = "✓" if ok else "❌"
-        print(f"  {status} 节点:{port} 创建 '{title}'")
-        if not ok:
-            print("  ❌ 创建失败"); sys.exit(1)
-    time.sleep(3)  # 等复制
-
-    # 3. 验证同步
-    print("\n[3/4] 验证 3 节点同步")
-    expected = 3
-    all_pass = True
-    for i, port in enumerate([leader_port, p2, p3], 1):
-        ok = wait_sync(port, expected)
-        events = get_events(port)
-        titles = [e.get("title", "") for e in events]
-        count = len(events)
-        status = "✓" if ok else "❌"
-        print(f"  {status} 节点{i}(port={port}): {count} 条事件")
-        if ok:
-            for t in sorted(titles):
-                print(f"       - {t}")
+    for port, title, ty, st, et in creates:
+        if create_event(port, title, ev_type=ty, start=st, end=et):
+            ok(f"创建 '{title}' (type={ty})")
         else:
-            all_pass = False
-            print(f"       期望 {expected} 条, 实际 {count} 条")
-            print(f"       已有: {titles}")
+            fail(f"创建 '{title}'")
+    time.sleep(4)
 
-    # 4. 结果
-    print("\n[4/4] 结果")
-    if all_pass:
-        print("  ✅ 全部通过: 3 节点数据一致")
+    # 验证: 所有节点都有 5 条事件
+    assert_all_nodes("5条事件同步", ports, lambda evs: len(evs) >= 5)
+
+    # 验证: 类型正确
+    print("\n[Phase 2b] 验证事件类型")
+    for _, title, ty, _, _ in creates:
+        if ty == "task": continue  # vacation start=0 可能有问题
+        def check_type(evs, t=title, ty=ty):
+            e = next((x for x in evs if x.get("title") == t), None)
+            return e is not None and e.get("type") == ty
+        assert_all_nodes(f"'{title}' type={ty}", ports, check_type)
+
+    # 验证: 时间正确
+    print("\n[Phase 2c] 验证时间字段")
+    def check_time(evs):
+        e = next((x for x in evs if x.get("title") == "meeting-from-f2"), None)
+        return e and e.get("startTime") == 14.0 and e.get("endTime") == 15.5
+    assert_all_nodes("'meeting-from-f2' 时间 14:00-15:30", ports, check_time)
+
+    # ===== Phase 3: 更新 =====
+    print("\n[Phase 3] 更新事件")
+    # 3a: 改类型
+    ev = find_event(p1, "task-from-leader")
+    if ev:
+        eid = ev["id"]
+        if update_event(p1, eid, eventType="issue"):
+            ok("类型变更 task→issue (Leader发起)")
+            time.sleep(3)
+            def check_type_change(evs):
+                e = next((x for x in evs if x.get("title") == "task-from-leader"), None)
+                return e and e.get("type") == "issue"
+            assert_all_nodes("'task-from-leader' type=issue 同步", ports, check_type_change)
+        else:
+            fail("类型变更请求失败")
     else:
-        print("  ❌ 同步异常")
-        sys.exit(1)
+        fail("找不到 task-from-leader")
 
+    # 3b: 改时间(从 Follower 发起)
+    ev = find_event(p2, "study-multi-hour")
+    if ev:
+        eid = ev["id"]
+        if update_event(p2, eid, startTime=13.0, endTime=15.0):
+            ok("时间变更 10:00→13:00 (Follower2发起)")
+            time.sleep(3)
+            def check_time_change(evs):
+                e = next((x for x in evs if x.get("title") == "study-multi-hour"), None)
+                return e and e.get("startTime") == 13.0 and e.get("endTime") == 15.0
+            assert_all_nodes("'study-multi-hour' 13:00-15:00 同步", ports, check_time_change)
+        else:
+            fail("时间变更请求失败")
+    else:
+        fail("找不到 study-multi-hour")
+
+    # 3c: 改标题+类型同时(从 Follower3 发起)
+    ev = find_event(p3, "deadline-from-f3")
+    if ev:
+        eid = ev["id"]
+        if update_event(p3, eid, title="deadline-renamed", eventType="trip"):
+            ok("标题+类型同时变更 (Follower3发起)")
+            time.sleep(3)
+            def check_both(evs):
+                e = next((x for x in evs if x.get("title") == "deadline-renamed"), None)
+                return e and e.get("type") == "trip"
+            assert_all_nodes("'deadline-renamed' type=trip 同步", ports, check_both)
+        else:
+            fail("标题+类型变更请求失败")
+
+    # ===== Phase 4: 删除 =====
+    print("\n[Phase 4] 删除事件")
+    ev = find_event(p2, "vacation-allday-test")
+    if ev:
+        eid = ev["id"]
+        if delete_event(p2, eid):
+            ok("删除 'vacation-allday-test' (Follower2发起)")
+            time.sleep(3)
+            def check_deleted(evs):
+                return not any(x.get("title") == "vacation-allday-test" for x in evs)
+            assert_all_nodes("'vacation-allday-test' 已删除", ports, check_deleted)
+        else:
+            fail("删除请求失败")
+
+    # ===== Phase 5: 最终一致性 =====
+    print("\n[Phase 5] 最终一致性检查")
+    time.sleep(3)
+    all_events = {p: get_events(p) for p in ports}
+    counts = {p: len(evs) for p, evs in all_events.items()}
+    titles_by_port = {p: sorted(e.get("title","") for e in evs) for p, evs in all_events.items()}
+
+    if len(set(counts.values())) == 1:
+        ok(f"事件数量一致: {list(counts.values())[0]} 条")
+    else:
+        fail(f"事件数量不一致: {counts}")
+
+    ref_titles = titles_by_port[ports[0]]
+    for i, port in enumerate(ports[1:], 2):
+        if titles_by_port[port] == ref_titles:
+            ok(f"节点{i} 标题集合与节点1一致")
+        else:
+            only_in_1 = set(ref_titles) - set(titles_by_port[port])
+            only_in_n = set(titles_by_port[port]) - set(ref_titles)
+            fail(f"节点{i} 标题不一致", f"独有: {only_in_1 | only_in_n}")
+
+    # ===== 结果 =====
     print("\n" + "=" * 55)
-    print("  测试完成")
+    total = passed + failed
+    print(f"  结果: {passed}/{total} 通过, {failed} 失败")
+    if failed == 0:
+        print("  ✅ 全部通过")
+    else:
+        print("  ❌ 存在失败项")
     print("=" * 55)
+    sys.exit(0 if failed == 0 else 1)
 
 if __name__ == "__main__":
     main()

@@ -306,6 +306,79 @@ async fn test_create_event(
     }
 }
 
+#[derive(Deserialize)]
+pub struct TestUpdateEvent {
+    pub token: Option<String>,
+    pub id: String,
+    pub title: Option<String>,
+    pub event_type: Option<String>,
+    pub start_time: Option<f64>,
+    pub end_time: Option<f64>,
+    pub date: Option<String>,
+    pub description: Option<String>,
+}
+
+async fn test_update_event(
+    State(app): State<AppState>,
+    Json(req): Json<TestUpdateEvent>,
+) -> Json<GenericResponse> {
+    if !token_ok(&app.handle, &req.token) {
+        return Json(GenericResponse { ok: false, msg: "令牌错误".into() });
+    }
+    // 构造更新后的事件(先从 SQLite 读原事件, 合并变更)
+    let db_path = find_db_path(app.handle.listen_port);
+    let conn = match rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(c) => c,
+        Err(e) => return Json(GenericResponse { ok: false, msg: format!("db: {e}") }),
+    };
+    let orig: Option<(String, String, Option<f64>, Option<f64>, String, String, String)> = conn.query_row(
+        "SELECT date, end_date, start_time, end_time, title, event_type, description FROM events WHERE id = ?1",
+        rusqlite::params![req.id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+    ).ok();
+    let Some((date, end_date, st, et, title, ty, desc)) = orig else {
+        return Json(GenericResponse { ok: false, msg: format!("事件 {} 不存在", req.id) });
+    };
+    drop(conn);
+
+    let event = serde_json::json!({
+        "id": req.id,
+        "date": req.date.unwrap_or(date),
+        "endDate": end_date,
+        "startTime": req.start_time.or(st),
+        "endTime": req.end_time.or(et),
+        "title": req.title.unwrap_or(title),
+        "type": req.event_type.unwrap_or(ty),
+        "description": req.description.unwrap_or(desc),
+        "isAllDay": false,
+    });
+    let cmd = crate::raft_cmd::RaftCommand::UpsertEvents { events: vec![event] };
+    match app.handle.raft.client_write(cmd).await {
+        Ok(_) => Json(GenericResponse { ok: true, msg: "updated".into() }),
+        Err(e) => Json(GenericResponse { ok: false, msg: format!("{e}") }),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct TestDeleteEvent {
+    pub token: Option<String>,
+    pub id: String,
+}
+
+async fn test_delete_event(
+    State(app): State<AppState>,
+    Json(req): Json<TestDeleteEvent>,
+) -> Json<GenericResponse> {
+    if !token_ok(&app.handle, &req.token) {
+        return Json(GenericResponse { ok: false, msg: "令牌错误".into() });
+    }
+    let cmd = crate::raft_cmd::RaftCommand::DeleteEvents { ids: vec![req.id] };
+    match app.handle.raft.client_write(cmd).await {
+        Ok(_) => Json(GenericResponse { ok: true, msg: "deleted".into() }),
+        Err(e) => Json(GenericResponse { ok: false, msg: format!("{e}") }),
+    }
+}
+
 async fn test_get_events(
     State(app): State<AppState>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -403,6 +476,8 @@ pub async fn start_server(
         .route("/cluster/status", get(cluster_status))
         .route("/test/create-event", post(test_create_event))
         .route("/test/events", get(test_get_events))
+        .route("/test/update-event", post(test_update_event))
+        .route("/test/delete-event", post(test_delete_event))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&addr)
