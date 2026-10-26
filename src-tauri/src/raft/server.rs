@@ -260,6 +260,132 @@ async fn cluster_status(
     })))
 }
 
+// ---------- 测试端点(令牌保护, 用于自动化验证) ----------
+
+#[derive(Deserialize)]
+pub struct TestCreateEvent {
+    pub token: Option<String>,
+    pub date: String,
+    pub start_time: f64,
+    pub end_time: f64,
+    pub title: String,
+    #[serde(default = "default_event_type")]
+    pub event_type: String,
+}
+fn default_event_type() -> String { "task".into() }
+
+#[derive(Serialize)]
+pub struct TestEventsResponse {
+    pub ok: bool,
+    pub count: usize,
+    pub events: Vec<serde_json::Value>,
+}
+
+async fn test_create_event(
+    State(app): State<AppState>,
+    Json(req): Json<TestCreateEvent>,
+) -> Json<GenericResponse> {
+    if !token_ok(&app.handle, &req.token) {
+        return Json(GenericResponse { ok: false, msg: "令牌错误".into() });
+    }
+    let event = serde_json::json!({
+        "id": format!("test-{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()),
+        "date": req.date,
+        "startTime": req.start_time,
+        "endTime": req.end_time,
+        "title": req.title,
+        "type": req.event_type,
+        "description": "auto-test",
+        "isAllDay": false,
+    });
+    let cmd = crate::raft_cmd::RaftCommand::UpsertEvents { events: vec![event] };
+    match app.handle.raft.client_write(cmd).await {
+        Ok(_) => Json(GenericResponse { ok: true, msg: "created".into() }),
+        Err(e) => Json(GenericResponse { ok: false, msg: format!("{e}") }),
+    }
+}
+
+async fn test_get_events(
+    State(app): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<TestEventsResponse> {
+    let token = params.get("token").cloned();
+    if !token_ok(&app.handle, &token) {
+        return Json(TestEventsResponse { ok: false, count: 0, events: vec![] });
+    }
+    // 直接读 SQLite(与 Raft 状态机共享同一文件)
+    let db_path = std::path::Path::new(
+        &app.handle.raft.metrics().borrow().id.to_string()
+    );
+    // 通过环境/已知路径读取 — 更简单: 打开当前数据目录
+    let conn = match rusqlite::Connection::open_with_flags(
+        find_db_path(app.handle.listen_port),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) {
+        Ok(c) => c,
+        Err(_) => return Json(TestEventsResponse { ok: false, count: 0, events: vec![] }),
+    };
+    let mut stmt = match conn.prepare(
+        "SELECT id, date, start_time, end_time, title, event_type, description FROM events WHERE deleted = 0"
+    ) {
+        Ok(s) => s,
+        Err(_) => return Json(TestEventsResponse { ok: false, count: 0, events: vec![] }),
+    };
+    let rows = match stmt.query_map([], |r| {
+        Ok(serde_json::json!({
+            "id": r.get::<_, String>(0)?,
+            "date": r.get::<_, String>(1)?,
+            "startTime": r.get::<_, Option<f64>>(2)?,
+            "endTime": r.get::<_, Option<f64>>(3)?,
+            "title": r.get::<_, String>(4)?,
+            "type": r.get::<_, String>(5)?,
+            "description": r.get::<_, String>(6)?,
+        }))
+    }) {
+        Ok(rows) => rows,
+        Err(_) => return Json(TestEventsResponse { ok: false, count: 0, events: vec![] }),
+    };
+    let events: Vec<serde_json::Value> = rows.filter_map(|r| r.ok()).collect();
+    let count = events.len();
+    Json(TestEventsResponse { ok: true, count, events })
+}
+
+/// 通过端口推断数据目录(测试专用: --data-dir 传入的路径下有 planning.db)
+fn find_db_path(port: u16) -> String {
+    // 依次尝试已知的测试目录模式
+    let candidates = [
+        format!("/tmp/raft-test/n{}/planning.db", port - 7877),
+        format!("/tmp/planning-e2e/node-{}/planning.db", port),
+    ];
+    for c in &candidates {
+        if std::path::Path::new(c).exists() {
+            return c.clone();
+        }
+    }
+    // 回退: 遍历 /tmp/raft-test 下所有子目录
+    if let Ok(entries) = std::fs::read_dir("/tmp/raft-test") {
+        for e in entries.filter_map(|e| e.ok()) {
+            let db = e.path().join("planning.db");
+            if db.exists() {
+                // 检查 raft_state 中是否有匹配端口的记录
+                if let Ok(conn) = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
+                    let stored: Option<String> = conn.query_row(
+                        "SELECT value FROM kv WHERE key = 'cluster.config'",
+                        [], |r| r.get::<_, String>(0)
+                    ).ok();
+                    if let Some(cfg) = stored {
+                        if cfg.contains(&port.to_string()) {
+                            return db.to_string_lossy().to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
 pub async fn start_server(
     handle: std::sync::Arc<RaftHandle>,
 ) -> Result<tokio::task::JoinHandle<()>, String> {
@@ -275,6 +401,8 @@ pub async fn start_server(
         .route("/cluster/remove", post(cluster_remove))
         .route("/cluster/propose", post(cluster_propose))
         .route("/cluster/status", get(cluster_status))
+        .route("/test/create-event", post(test_create_event))
+        .route("/test/events", get(test_get_events))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&addr)

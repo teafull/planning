@@ -87,7 +87,14 @@ fn init_tracing() {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_tracing();
-    tauri::Builder::default().setup(|app| {
+
+    // 解析 --bootstrap 和 --token
+    let should_bootstrap = std::env::args().any(|a| a == "--bootstrap");
+    let bootstrap_token = std::env::args()
+        .position(|a| a == "--token")
+        .and_then(|i| std::env::args().nth(i + 1));
+
+    tauri::Builder::default().setup(move |app| {
         // 初始化 SQLite 存储(失败不阻塞窗口, 前端命令会报错)
         if let Err(e) = db::init(app.handle()) {
             tracing::error!("数据库初始化失败: {e}");
@@ -95,8 +102,12 @@ pub fn run() {
         app.manage(db::ClusterState::default());
         // 按持久化配置自动重连集群(异步, 不阻塞窗口)
         let h = app.handle().clone();
+        let bt = bootstrap_token.clone();
         tauri::async_runtime::spawn(async move {
-            db::auto_start_cluster(h).await;
+            db::auto_start_cluster(h.clone()).await;
+            if should_bootstrap {
+                db::bootstrap_cluster(h, bt).await;
+            }
         });
 
         let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;

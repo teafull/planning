@@ -1239,6 +1239,46 @@ pub async fn cluster_remove(
     }
 }
 
+
+/// 命令行 --bootstrap: 启动时自动创建单节点集群(用于自动化测试)
+pub async fn bootstrap_cluster(app: tauri::AppHandle, token: Option<String>) {
+    let db = app.state::<Db>();
+    let cluster = app.state::<ClusterState>();
+    if cluster.handle.lock().await.is_some() { return; }
+    let (_, port) = parse_launch_args();
+    let port = port.unwrap_or(7878);
+    let token = token.unwrap_or_else(gen_token);
+    let (db_path, snap_dir) = {
+        let conn = db.0.lock().unwrap();
+        let p = conn.path().map(|s| s.to_string()).unwrap_or_default();
+        if p.is_empty() { return; }
+        (std::path::PathBuf::from(&p), std::path::Path::new(&p).parent().map(|d| d.to_path_buf()).unwrap_or_default())
+    };
+    { let conn = db.0.lock().unwrap(); wipe_raft_state(&conn); }
+    let handle = match crate::raft::start_node(Some(app.clone()), 1, &db_path, snap_dir.join("snapshots"), port, Some(token.clone())).await {
+        Ok(h) => h,
+        Err(e) => { tracing::error!("[bootstrap] Raft: {e}"); return; }
+    };
+    let mut members = std::collections::BTreeMap::new();
+    members.insert(1u64, openraft::BasicNode { addr: format!("127.0.0.1:{port}") });
+    if let Err(e) = handle.raft.initialize(members).await {
+        tracing::error!("[bootstrap] init: {e}");
+        let _ = handle.raft.shutdown().await;
+        return;
+    }
+    let hist = { let conn = db.0.lock().unwrap(); crate::raft_cmd::collect_local_events_for_proposal(&conn).unwrap_or_default() };
+    for cmd in &hist { let _ = handle.raft.client_write(cmd.clone()).await; }
+    match crate::raft::server::start_server(handle.clone()).await {
+        Ok(jh) => {
+            *cluster.server_task.lock().await = Some(jh);
+            spawn_pending_flusher(app.clone());
+            *cluster.handle.lock().await = Some(handle);
+            println!("[bootstrap] token={token} port={port}");
+        }
+        Err(e) => { tracing::error!("[bootstrap] HTTP: {e}"); let _ = handle.raft.shutdown().await; }
+    }
+}
+
 /// 应用启动时按持久化配置自动重启集群(重连)
 pub async fn auto_start_cluster(app: tauri::AppHandle) {
     let db = app.state::<Db>();
