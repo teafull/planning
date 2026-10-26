@@ -54,8 +54,46 @@ fn default_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("planning"))
 }
 
-/// 解析当前生效目录: 配置优先, 配置不可用时回退默认目录
+/// 解析启动参数: --data-dir <path> 与 --port <n>
+/// 用于单机多节点测试: planning --data-dir /tmp/node1 --port 7878
+pub fn parse_launch_args() -> (Option<String>, Option<u16>) {
+    let args: Vec<String> = std::env::args().collect();
+    let mut data_dir = None;
+    let mut port = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--data-dir" | "-d" => {
+                if i + 1 < args.len() {
+                    data_dir = Some(args[i + 1].clone());
+                    i += 1;
+                }
+            }
+            "--port" | "-p" => {
+                if i + 1 < args.len() {
+                    port = args[i + 1].parse::<u16>().ok();
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (data_dir, port)
+}
+
+/// 解析当前生效目录: 命令行参数 > 配置 > 默认
 fn resolve_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    // 命令行参数优先级最高
+    if let Some((Some(dir), _)) = std::thread::spawn(parse_launch_args).join().ok() {
+        let p = PathBuf::from(&dir);
+        if fs::create_dir_all(&p).is_ok() {
+            return Ok(p);
+        }
+        tracing::warn!("命令行指定的数据目录不可用: {dir}");
+    }
+
+    let cfg = read_config(app);
     let cfg = read_config(app);
     if let Some(dir) = cfg.data_dir {
         let p = PathBuf::from(&dir);
@@ -1214,8 +1252,14 @@ pub async fn auto_start_cluster(app: tauri::AppHandle) {
             .and_then(|s| serde_json::from_str(&s).ok())
     };
     let Some(cfg) = cfg else { return };
-    let (Some(node_id), Some(port), Some(token)) = (cfg.node_id, cfg.listen_port, cfg.token) else {
+    let (Some(node_id), Some(cfg_port), Some(token)) = (cfg.node_id, cfg.listen_port, cfg.token) else {
         return;
+    };
+    // 命令行 --port 覆盖
+    let port = if let Some((_, Some(p))) = std::thread::spawn(parse_launch_args).join().ok() {
+        p
+    } else {
+        cfg_port
     };
 
     let (db_path, snap_dir) = {
