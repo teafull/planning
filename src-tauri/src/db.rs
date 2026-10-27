@@ -94,7 +94,6 @@ fn resolve_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     let cfg = read_config(app);
-    let cfg = read_config(app);
     if let Some(dir) = cfg.data_dir {
         let p = PathBuf::from(&dir);
         if fs::create_dir_all(&p).is_ok() {
@@ -1277,6 +1276,123 @@ pub async fn bootstrap_cluster(app: tauri::AppHandle, token: Option<String>) {
         }
         Err(e) => { tracing::error!("[bootstrap] HTTP: {e}"); let _ = handle.raft.shutdown().await; }
     }
+}
+
+/// 命令行 --join <leader-addr>: Follower 自动启动并加入集群(用于自动化测试)
+/// planning --data-dir /tmp/n2 --port 7879 --join 127.0.0.1:7878 --token test123
+pub async fn join_via_cli(app: tauri::AppHandle, leader_addr: String, token: String) {
+    let db = app.state::<Db>();
+    let cluster = app.state::<ClusterState>();
+
+    if cluster.handle.lock().await.is_some() {
+        tracing::info!("[join-cli] 集群已运行, 跳过");
+        return;
+    }
+
+    let (_, port_override) = parse_launch_args();
+    let port = port_override.unwrap_or(7879);
+
+    let (db_path, snap_dir) = {
+        let conn = db.0.lock().unwrap();
+        let p = conn.path().map(|s| s.to_string()).unwrap_or_default();
+        if p.is_empty() { tracing::error!("[join-cli] 无库路径"); return; }
+        (std::path::PathBuf::from(&p),
+         std::path::Path::new(&p).parent().map(|d| d.to_path_buf()).unwrap_or_default())
+    };
+
+    // 清旧状态 + 本地启动
+    {
+        let conn = db.0.lock().unwrap();
+        wipe_raft_state(&conn);
+    }
+
+    // 先查 Leader 获取 node_id
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build().unwrap_or_default();
+    let status: serde_json::Value = match client
+        .get(format!("http://{leader_addr}/cluster/status"))
+        .header("x-cluster-token", &token)
+        .send().await
+    {
+        Ok(r) if r.status().is_success() => r.json().await.unwrap_or(serde_json::Value::Null),
+        _ => { tracing::error!("[join-cli] 无法连接 Leader {leader_addr}"); return; }
+    };
+    let max_id = status["membership"].as_array()
+        .map(|a| a.iter().filter_map(|m| m["raftId"].as_u64()).max().unwrap_or(0))
+        .unwrap_or(0);
+    let my_id = max_id + 1;
+    let my_addr = format!("127.0.0.1:{port}");
+
+    // 启动本节点(不 initialize)
+    let handle = match crate::raft::start_node(
+        Some(app.clone()), my_id, &db_path, snap_dir.join("snapshots"), port, Some(token.clone())
+    ).await {
+        Ok(h) => h,
+        Err(e) => { tracing::error!("[join-cli] Raft: {e}"); return; }
+    };
+
+    // 启动 HTTP 服务(关键! 让 Leader 能复制到此节点)
+    let jh = match crate::raft::server::start_server(handle.clone()).await {
+        Ok(jh) => jh,
+        Err(e) => {
+            tracing::error!("[join-cli] HTTP: {e}");
+            let _ = handle.raft.shutdown().await;
+            return;
+        }
+    };
+
+    // 向 Leader 登记
+    let join_resp: serde_json::Value = match client
+        .post(format!("http://{leader_addr}/cluster/join"))
+        .json(&serde_json::json!({"token": token, "raftId": my_id, "addr": my_addr}))
+        .send().await
+    {
+        Ok(r) if r.status().is_success() => r.json().await.unwrap_or(serde_json::Value::Null),
+        Ok(r) => {
+            let code = r.status();
+            let text = r.text().await.unwrap_or_default();
+            tracing::error!("[join-cli] 登记失败({code}): {text}");
+            jh.abort();
+            let _ = handle.raft.shutdown().await;
+            return;
+        }
+        Err(e) => {
+            tracing::error!("[join-cli] 网络失败: {e}");
+            jh.abort();
+            let _ = handle.raft.shutdown().await;
+            return;
+        }
+    };
+    if !join_resp["ok"].as_bool().unwrap_or(false) {
+        tracing::error!("[join-cli] 被拒: {}", join_resp["msg"].as_str().unwrap_or("?"));
+        jh.abort();
+        let _ = handle.raft.shutdown().await;
+        return;
+    }
+
+    // 成功: 设置状态
+    *cluster.server_task.lock().await = Some(jh);
+    spawn_pending_flusher(app.clone());
+    *cluster.handle.lock().await = Some(handle);
+    println!("[join-cli] 已加入: node={my_id} port={port} leader={leader_addr}");
+
+    // 异步请求转正(重试)
+    let la = leader_addr.clone();
+    let tok = token.clone();
+    tokio::spawn(async move {
+        for _ in 0..12 {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let c = reqwest::Client::new();
+            if let Ok(r) = c.post(format!("http://{la}/cluster/promote"))
+                .json(&serde_json::json!({"raftId": my_id, "token": tok}))
+                .timeout(std::time::Duration::from_secs(30))
+                .send().await
+            {
+                if r.status().is_success() { break; }
+            }
+        }
+    });
 }
 
 /// 应用启动时按持久化配置自动重启集群(重连)

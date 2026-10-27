@@ -93,6 +93,9 @@ pub fn run() {
     let bootstrap_token = std::env::args()
         .position(|a| a == "--token")
         .and_then(|i| std::env::args().nth(i + 1));
+    let join_addr = std::env::args()
+        .position(|a| a == "--join")
+        .and_then(|i| std::env::args().nth(i + 1));
 
     tauri::Builder::default().setup(move |app| {
         // 初始化 SQLite 存储(失败不阻塞窗口, 前端命令会报错)
@@ -103,10 +106,15 @@ pub fn run() {
         // 按持久化配置自动重连集群(异步, 不阻塞窗口)
         let h = app.handle().clone();
         let bt = bootstrap_token.clone();
+        let ja = join_addr.clone();
         tauri::async_runtime::spawn(async move {
-            db::auto_start_cluster(h.clone()).await;
             if should_bootstrap {
                 db::bootstrap_cluster(h, bt).await;
+            } else if let Some(leader) = ja {
+                let tok = bt.unwrap_or_else(|| "e2eauto123".to_string());
+                db::join_via_cli(h, leader, tok).await;
+            } else {
+                db::auto_start_cluster(h).await;
             }
         });
 

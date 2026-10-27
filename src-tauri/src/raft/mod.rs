@@ -28,6 +28,8 @@ pub struct RaftHandle {
     pub listen_port: u16,
     /// 集群令牌(校验加入请求)
     pub cluster_token: Option<String>,
+    /// 数据库文件路径(测试端点直接读)
+    pub db_path: std::path::PathBuf,
 }
 
 impl RaftHandle {
@@ -99,8 +101,10 @@ pub async fn start_node(
     listen_port: u16,
     cluster_token: Option<String>,
 ) -> Result<Arc<RaftHandle>, String> {
-    let log_store = storage::LogStore::open(db_path).map_err(|e| e.to_string())?;
-    let sm_store = storage::StateMachineStore::open(db_path, snap_dir, app).map_err(|e| e.to_string())?;
+    let db_path = db_path.to_path_buf();
+    let db_ref = db_path.as_path();
+    let log_store = storage::LogStore::open(db_ref).map_err(|e| e.to_string())?;
+    let sm_store = storage::StateMachineStore::open(db_ref, snap_dir, app).map_err(|e| e.to_string())?;
 
     let raft = Raft::new(
         node_id,
@@ -117,6 +121,7 @@ pub async fn start_node(
         node_id,
         listen_port,
         cluster_token,
+        db_path,
     }))
 }
 

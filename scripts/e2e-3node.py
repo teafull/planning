@@ -55,50 +55,63 @@ def start_leader():
 def start_follower(n):
     d = f"{TEST_DIR}/n{n}"; port = BASE_PORT + n - 1
     os.makedirs(d, exist_ok=True)
-    print(f"  节点{n}: port={port} joining...")
+    print(f"  节点{n}: port={port} joining via --join...")
     p = subprocess.Popen(
-        [BINARY, "--data-dir", d, "--port", str(port)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+        [BINARY, "--data-dir", d, "--port", str(port),
+         "--join", f"127.0.0.1:{BASE_PORT}", "--token", TOKEN],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         start_new_session=True)
     processes.append(p)
-    time.sleep(3)
-    r = requests.post(f"http://127.0.0.1:{BASE_PORT}/cluster/join",
-                      json={"token": TOKEN, "raftId": n,
-                            "addr": f"127.0.0.1:{port}"}, timeout=5)
-    if r.status_code != 200 or not r.json().get("ok"):
-        print(f"  ❌ join 失败: {r.text}"); sys.exit(1)
-    print(f"  ✓ 节点{n} 已加入")
-    time.sleep(2)
-    requests.post(f"http://127.0.0.1:{BASE_PORT}/cluster/promote",
-                  json={"raftId": n, "token": TOKEN}, timeout=5)
-    time.sleep(2)
-    return port
+
+    # 等待该节点 HTTP 就绪(表示 Raft + HTTP 已启动)
+    for _ in range(30):
+        time.sleep(1)
+        try:
+            r = requests.get(f"http://127.0.0.1:{port}/cluster/status",
+                           headers={"x-cluster-token": TOKEN}, timeout=2)
+            if r.status_code == 200:
+                print(f"  ✓ 节点{n} 就绪 (port={port})")
+                return port
+        except: pass
+    print(f"  ❌ 节点{n} 启动超时"); sys.exit(1)
 
 # ===== HTTP helpers =====
 
 def create_event(port, title, date="2026-12-25", start=9.0, end=10.0, ev_type="meeting"):
-    r = requests.post(f"http://127.0.0.1:{port}/test/create-event",
-                      json={"token": TOKEN, "date": date,
-                            "startTime": start, "endTime": end,
-                            "title": title, "eventType": ev_type}, timeout=5)
-    return r.json().get("ok", False)
+    try:
+        r = requests.post(f"http://127.0.0.1:{port}/test/create-event",
+                          json={"token": TOKEN, "date": date,
+                                "startTime": start, "endTime": end,
+                                "title": title, "eventType": ev_type}, timeout=20)
+        return r.json().get("ok", False)
+    except Exception:
+        return False
 
 def update_event(port, event_id, **kwargs):
     body = {"token": TOKEN, "id": event_id}
     body.update(kwargs)
-    r = requests.post(f"http://127.0.0.1:{port}/test/update-event",
-                      json=body, timeout=5)
-    return r.json().get("ok", False)
+    try:
+        r = requests.post(f"http://127.0.0.1:{port}/test/update-event",
+                          json=body, timeout=20)
+        return r.json().get("ok", False)
+    except Exception:
+        return False
 
 def delete_event(port, event_id):
-    r = requests.post(f"http://127.0.0.1:{port}/test/delete-event",
-                      json={"token": TOKEN, "id": event_id}, timeout=5)
-    return r.json().get("ok", False)
+    try:
+        r = requests.post(f"http://127.0.0.1:{port}/test/delete-event",
+                          json={"token": TOKEN, "id": event_id}, timeout=20)
+        return r.json().get("ok", False)
+    except Exception:
+        return False
 
 def get_events(port):
-    r = requests.get(f"http://127.0.0.1:{port}/test/events",
-                     params={"token": TOKEN}, timeout=5)
-    return r.json().get("events", [])
+    try:
+        r = requests.get(f"http://127.0.0.1:{port}/test/events",
+                         params={"token": TOKEN}, timeout=20)
+        return r.json().get("events", [])
+    except Exception:
+        return []
 
 def find_event(port, title):
     for e in get_events(port):
@@ -140,7 +153,19 @@ def main():
     p2 = start_follower(2)
     p3 = start_follower(3)
     ports = [p1, p2, p3]
-    time.sleep(3)
+
+    # 等待自动转正完成(--join 内置 12 次 × 5s 重试)
+    print("  等待转正(最多30s)...")
+    time.sleep(15)
+    # 检查是否已是投票成员
+    try:
+        r = requests.get(f"http://127.0.0.1:{BASE_PORT}/cluster/status",
+                        headers={"x-cluster-token": TOKEN}, timeout=5)
+        members = r.json().get("membership", [])
+        print(f"  成员: {len(members)} 个")
+    except: pass
+    time.sleep(15)
+    print("  ✓ 集群就绪")
 
     # ===== Phase 2: 创建(多类型) =====
     print("\n[Phase 2] 创建事件(各节点+多类型)")
@@ -156,7 +181,7 @@ def main():
             ok(f"创建 '{title}' (type={ty})")
         else:
             fail(f"创建 '{title}'")
-    time.sleep(4)
+    time.sleep(8)
 
     # 验证: 所有节点都有 5 条事件
     assert_all_nodes("5条事件同步", ports, lambda evs: len(evs) >= 5)
@@ -185,7 +210,7 @@ def main():
         eid = ev["id"]
         if update_event(p1, eid, eventType="issue"):
             ok("类型变更 task→issue (Leader发起)")
-            time.sleep(3)
+            time.sleep(5)
             def check_type_change(evs):
                 e = next((x for x in evs if x.get("title") == "task-from-leader"), None)
                 return e and e.get("type") == "issue"
@@ -201,7 +226,7 @@ def main():
         eid = ev["id"]
         if update_event(p2, eid, startTime=13.0, endTime=15.0):
             ok("时间变更 10:00→13:00 (Follower2发起)")
-            time.sleep(3)
+            time.sleep(5)
             def check_time_change(evs):
                 e = next((x for x in evs if x.get("title") == "study-multi-hour"), None)
                 return e and e.get("startTime") == 13.0 and e.get("endTime") == 15.0
@@ -217,7 +242,7 @@ def main():
         eid = ev["id"]
         if update_event(p3, eid, title="deadline-renamed", eventType="trip"):
             ok("标题+类型同时变更 (Follower3发起)")
-            time.sleep(3)
+            time.sleep(5)
             def check_both(evs):
                 e = next((x for x in evs if x.get("title") == "deadline-renamed"), None)
                 return e and e.get("type") == "trip"
@@ -232,7 +257,7 @@ def main():
         eid = ev["id"]
         if delete_event(p2, eid):
             ok("删除 'vacation-allday-test' (Follower2发起)")
-            time.sleep(3)
+            time.sleep(5)
             def check_deleted(evs):
                 return not any(x.get("title") == "vacation-allday-test" for x in evs)
             assert_all_nodes("'vacation-allday-test' 已删除", ports, check_deleted)

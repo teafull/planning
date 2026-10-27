@@ -263,6 +263,7 @@ async fn cluster_status(
 // ---------- 测试端点(令牌保护, 用于自动化验证) ----------
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TestCreateEvent {
     pub token: Option<String>,
     pub date: String,
@@ -307,6 +308,7 @@ async fn test_create_event(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TestUpdateEvent {
     pub token: Option<String>,
     pub id: String,
@@ -326,12 +328,12 @@ async fn test_update_event(
         return Json(GenericResponse { ok: false, msg: "令牌错误".into() });
     }
     // 构造更新后的事件(先从 SQLite 读原事件, 合并变更)
-    let db_path = find_db_path(app.handle.listen_port);
-    let conn = match rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
+    let db_path = find_db_path(&app.handle);
+    let conn = match rusqlite::Connection::open(&db_path) {
         Ok(c) => c,
         Err(e) => return Json(GenericResponse { ok: false, msg: format!("db: {e}") }),
     };
-    let orig: Option<(String, String, Option<f64>, Option<f64>, String, String, String)> = conn.query_row(
+    let orig: Option<(String, Option<String>, Option<f64>, Option<f64>, String, String, String)> = conn.query_row(
         "SELECT date, end_date, start_time, end_time, title, event_type, description FROM events WHERE id = ?1",
         rusqlite::params![req.id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
@@ -388,12 +390,10 @@ async fn test_get_events(
         return Json(TestEventsResponse { ok: false, count: 0, events: vec![] });
     }
     // 直接读 SQLite(与 Raft 状态机共享同一文件)
-    let db_path = std::path::Path::new(
-        &app.handle.raft.metrics().borrow().id.to_string()
-    );
+    // db_path now obtained from handle directly
     // 通过环境/已知路径读取 — 更简单: 打开当前数据目录
     let conn = match rusqlite::Connection::open_with_flags(
-        find_db_path(app.handle.listen_port),
+        find_db_path(&app.handle),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     ) {
         Ok(c) => c,
@@ -424,39 +424,9 @@ async fn test_get_events(
     Json(TestEventsResponse { ok: true, count, events })
 }
 
-/// 通过端口推断数据目录(测试专用: --data-dir 传入的路径下有 planning.db)
-fn find_db_path(port: u16) -> String {
-    // 依次尝试已知的测试目录模式
-    let candidates = [
-        format!("/tmp/raft-test/n{}/planning.db", port - 7877),
-        format!("/tmp/planning-e2e/node-{}/planning.db", port),
-    ];
-    for c in &candidates {
-        if std::path::Path::new(c).exists() {
-            return c.clone();
-        }
-    }
-    // 回退: 遍历 /tmp/raft-test 下所有子目录
-    if let Ok(entries) = std::fs::read_dir("/tmp/raft-test") {
-        for e in entries.filter_map(|e| e.ok()) {
-            let db = e.path().join("planning.db");
-            if db.exists() {
-                // 检查 raft_state 中是否有匹配端口的记录
-                if let Ok(conn) = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) {
-                    let stored: Option<String> = conn.query_row(
-                        "SELECT value FROM kv WHERE key = 'cluster.config'",
-                        [], |r| r.get::<_, String>(0)
-                    ).ok();
-                    if let Some(cfg) = stored {
-                        if cfg.contains(&port.to_string()) {
-                            return db.to_string_lossy().to_string();
-                        }
-                    }
-                }
-            }
-        }
-    }
-    String::new()
+/// 从 RaftHandle 获取数据库路径(不再猜测)
+fn find_db_path(handle: &std::sync::Arc<RaftHandle>) -> String {
+    handle.db_path.to_string_lossy().to_string()
 }
 
 pub async fn start_server(
