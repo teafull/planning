@@ -85,7 +85,7 @@ pub struct ProposeRequest {
     pub token: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct GenericResponse {
     pub ok: bool,
     pub msg: String,
@@ -303,7 +303,41 @@ async fn test_create_event(
     let cmd = crate::raft_cmd::RaftCommand::UpsertEvents { events: vec![event] };
     match app.handle.raft.client_write(cmd).await {
         Ok(_) => Json(GenericResponse { ok: true, msg: "created".into() }),
-        Err(e) => Json(GenericResponse { ok: false, msg: format!("{e}") }),
+        Err(e) => {
+            // 非 Leader → 转发到 Leader 的同名端点
+            if let Some(fl) = e.forward_to_leader() {
+                if let Some(node) = &fl.leader_node {
+                    return Json(forward_to_leader_test(
+                        &format!("http://{}/test/create-event", node.addr),
+                        &serde_json::json!({
+                            "token": req.token,
+                            "date": req.date,
+                            "startTime": req.start_time,
+                            "endTime": req.end_time,
+                            "title": req.title,
+                            "eventType": req.event_type,
+                        }),
+                    ).await);
+                }
+            }
+            Json(GenericResponse { ok: false, msg: format!("{e}") })
+        }
+    }
+}
+
+/// 转发测试请求到 Leader(异步辅助)
+async fn forward_to_leader_test(url: &str, body: &serde_json::Value) -> GenericResponse {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build().unwrap_or_default();
+    match client.post(url).json(body).send().await {
+        Ok(r) if r.status().is_success() => {
+            r.json::<GenericResponse>().await.unwrap_or(
+                GenericResponse { ok: false, msg: "Leader 响应解析失败".into() }
+            )
+        }
+        Ok(r) => GenericResponse { ok: false, msg: format!("Leader 拒绝({})", r.status()) },
+        Err(e) => GenericResponse { ok: false, msg: format!("转发失败: {e}") },
     }
 }
 
@@ -344,20 +378,36 @@ async fn test_update_event(
     drop(conn);
 
     let event = serde_json::json!({
-        "id": req.id,
-        "date": req.date.unwrap_or(date),
+        "id": req.id.clone(),
+        "date": req.date.clone().unwrap_or(date),
         "endDate": end_date,
         "startTime": req.start_time.or(st),
         "endTime": req.end_time.or(et),
-        "title": req.title.unwrap_or(title),
-        "type": req.event_type.unwrap_or(ty),
-        "description": req.description.unwrap_or(desc),
+        "title": req.title.clone().unwrap_or(title),
+        "type": req.event_type.clone().unwrap_or(ty),
+        "description": req.description.clone().unwrap_or(desc),
         "isAllDay": false,
     });
     let cmd = crate::raft_cmd::RaftCommand::UpsertEvents { events: vec![event] };
     match app.handle.raft.client_write(cmd).await {
         Ok(_) => Json(GenericResponse { ok: true, msg: "updated".into() }),
-        Err(e) => Json(GenericResponse { ok: false, msg: format!("{e}") }),
+        Err(e) => {
+            if let Some(fl) = e.forward_to_leader() {
+                if let Some(node) = &fl.leader_node {
+                    let mut body = serde_json::json!({"token": req.token, "id": req.id});
+                    if let Some(v) = req.title.as_ref() { body["title"] = serde_json::json!(v); }
+                    if let Some(v) = req.event_type.as_ref() { body["eventType"] = serde_json::json!(v); }
+                    if let Some(v) = req.start_time { body["startTime"] = serde_json::json!(v); }
+                    if let Some(v) = req.end_time { body["endTime"] = serde_json::json!(v); }
+                    if let Some(v) = req.date.as_ref() { body["date"] = serde_json::json!(v); }
+                    if let Some(v) = req.description.as_ref() { body["description"] = serde_json::json!(v); }
+                    return Json(forward_to_leader_test(
+                        &format!("http://{}/test/update-event", node.addr), &body,
+                    ).await);
+                }
+            }
+            Json(GenericResponse { ok: false, msg: format!("{e}") })
+        }
     }
 }
 
@@ -374,10 +424,20 @@ async fn test_delete_event(
     if !token_ok(&app.handle, &req.token) {
         return Json(GenericResponse { ok: false, msg: "令牌错误".into() });
     }
-    let cmd = crate::raft_cmd::RaftCommand::DeleteEvents { ids: vec![req.id] };
+    let cmd = crate::raft_cmd::RaftCommand::DeleteEvents { ids: vec![req.id.clone()] };
     match app.handle.raft.client_write(cmd).await {
         Ok(_) => Json(GenericResponse { ok: true, msg: "deleted".into() }),
-        Err(e) => Json(GenericResponse { ok: false, msg: format!("{e}") }),
+        Err(e) => {
+            if let Some(fl) = e.forward_to_leader() {
+                if let Some(node) = &fl.leader_node {
+                    return Json(forward_to_leader_test(
+                        &format!("http://{}/test/delete-event", node.addr),
+                        &serde_json::json!({"token": req.token.clone(), "id": req.id.clone()}),
+                    ).await);
+                }
+            }
+            Json(GenericResponse { ok: false, msg: format!("{e}") })
+        }
     }
 }
 
