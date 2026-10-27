@@ -1,814 +1,434 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { events, loadEvents } from '../store/events'
+import { initRaftListener } from '../store/events'
+import * as echarts from 'echarts'
+import {
+  startOfDay, parseDate, formatYmd, isInRange, isEventOnDay,
+  dailyDistribution, hourlyDensity, weekdayDistribution, typeBreakdown, generateInsights
+} from '../utils/statsAnalysis'
+import { getEventType } from '../utils/eventTypes'
 
-
-const range = ref('近7天')
+// ---------- 状态 ----------
+const range = ref('近30天')
 const dateRange = ref([])
+const selectedType = ref(null) // 类型筛选(null=全部)
+const reportText = ref('')
+let charts = {}
+let raftUnlisten = null
 
-
-
-const typeConfig = [
-  { value: 'task', label: '任务', color: '#6366f1' },
-  { value: 'meeting', label: '会议', color: '#22c55e' },
-  { value: 'reminder', label: '提醒', color: '#f59e0b' },
-  { value: 'issue', label: '问题', color: '#ef4444' },
-  { value: 'deadline', label: '截止期限', color: '#991b1b' },
-  { value: 'study', label: '学习/培训', color: '#3b82f6' },
-  { value: 'trip', label: '出差/外出', color: '#8b5cf6' },
-  { value: 'vacation', label: '请假/休息', color: '#14b8a6' },
-  { value: 'other', label: '其他', color: '#94a3b8' }
-]
-
-onMounted(() => {
+onMounted(async () => {
   loadEvents()
+  await nextTick()
+  initCharts()
+  raftUnlisten = await initRaftListener()
+  window.addEventListener('resize', resizeCharts)
 })
 
-
-const startOfDay = (date) => new Date(date.getFullYear(), date.getMonth(), date.getDate())
-const endOfDay = (date) => {
-  const end = new Date(date.getFullYear(), date.getMonth(), date.getDate())
-  end.setHours(23, 59, 59, 999)
-  return end
-}
-
-const parseDate = (value) => {
-
-  if (!value) return null
-  if (value instanceof Date) return startOfDay(value)
-  if (typeof value !== 'string') return null
-  const [year, month, day] = value.split('-').map(Number)
-  if (year && month && day) {
-    return new Date(year, month - 1, day)
-  }
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return null
-  return startOfDay(parsed)
-}
-
-const formatYmd = (date) => {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-const formatTime = (value) => {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return '--'
-  const hours = Math.floor(value)
-  const minutes = Math.round((value - hours) * 60)
-  const hText = String(hours).padStart(2, '0')
-  const mText = String(minutes).padStart(2, '0')
-  return `${hText}:${mText}`
-}
-
-const weekRange = computed(() => {
-  const today = startOfDay(new Date())
-  const day = today.getDay()
-  const diff = day === 0 ? -6 : 1 - day
-  const start = new Date(today)
-  start.setDate(today.getDate() + diff)
-  const end = new Date(start)
-  end.setDate(start.getDate() + 6)
-  return { start, end }
+onUnmounted(() => {
+  Object.values(charts).forEach(c => c?.dispose())
+  window.removeEventListener('resize', resizeCharts)
+  if (raftUnlisten) raftUnlisten()
 })
 
-const isEventOnDay = (event, day) => {
-  const dayStr = formatYmd(day)
-  if (!event.isAllDay) {
-    return event.date === dayStr
-  }
-  const { start, end } = getEventRange(event)
-  if (!start || !end) return false
-  return start <= day && end >= day
-}
-
-const getEventRange = (event) => {
-
-  const start = parseDate(event.date)
-  const end = parseDate(event.endDate || event.date)
-  return { start, end }
-}
-
+// ---------- 范围计算 ----------
 const rangeInfo = computed(() => {
   const today = startOfDay(new Date())
   if (Array.isArray(dateRange.value) && dateRange.value.length === 2 && dateRange.value[0] && dateRange.value[1]) {
-    const first = parseDate(dateRange.value[0])
-    const second = parseDate(dateRange.value[1])
-    if (first && second) {
-      const start = first <= second ? first : second
-      const end = first <= second ? second : first
-      const days = Math.floor((end - start) / 86400000) + 1
-      return { start, end, days }
+    const a = parseDate(dateRange.value[0])
+    const b = parseDate(dateRange.value[1])
+    if (a && b) {
+      const start = a <= b ? a : b
+      const end = a <= b ? b : a
+      return { start, end, days: Math.round((end - start) / 86400000) + 1 }
     }
   }
-  if (range.value === '今天') {
-    return { start: today, end: today, days: 1 }
+  const map = {
+    '今天': [today, today], '近7天': [addDays(today, -6), today],
+    '近30天': [addDays(today, -29), today], '本月': [new Date(today.getFullYear(), today.getMonth(), 1), today],
+    '本季度': [new Date(today.getFullYear(), Math.floor(today.getMonth() / 3) * 3, 1), today],
+    '本半年': [new Date(today.getFullYear(), today.getMonth() >= 6 ? 6 : 0, 1), today],
+    '本年': [new Date(today.getFullYear(), 0, 1), today],
   }
-
-  if (range.value === '本月') {
-    const start = new Date(today.getFullYear(), today.getMonth(), 1)
-    const end = new Date(today.getFullYear(), today.getMonth() + 1, 0)
-    const days = Math.floor((end - start) / 86400000) + 1
-    return { start, end, days }
-  }
-  if (range.value === '本季度') {
-    const quarterStartMonth = Math.floor(today.getMonth() / 3) * 3
-    const start = new Date(today.getFullYear(), quarterStartMonth, 1)
-    const end = new Date(today.getFullYear(), quarterStartMonth + 3, 0)
-    const days = Math.floor((end - start) / 86400000) + 1
-    return { start, end, days }
-  }
-  if (range.value === '本半年') {
-    const halfStartMonth = today.getMonth() < 6 ? 0 : 6
-    const start = new Date(today.getFullYear(), halfStartMonth, 1)
-    const end = new Date(today.getFullYear(), halfStartMonth + 6, 0)
-    const days = Math.floor((end - start) / 86400000) + 1
-    return { start, end, days }
-  }
-  if (range.value === '本年') {
-    const start = new Date(today.getFullYear(), 0, 1)
-    const end = new Date(today.getFullYear(), 11, 31)
-    const days = Math.floor((end - start) / 86400000) + 1
-    return { start, end, days }
-  }
-  const days = range.value === '近30天' ? 30 : 7
-  const start = new Date(today)
-  start.setDate(today.getDate() - (days - 1))
-  return { start, end: today, days }
+  const [start, end] = map[range.value] || map['近30天']
+  return { start, end, days: Math.round((end - start) / 86400000) + 1 }
 })
 
 const previousRangeInfo = computed(() => {
   const { start, end, days } = rangeInfo.value
-  if (Array.isArray(dateRange.value) && dateRange.value.length === 2 && dateRange.value[0] && dateRange.value[1]) {
-    const prevStart = new Date(start)
-    prevStart.setDate(start.getDate() - days)
-    const prevEnd = new Date(end)
-    prevEnd.setDate(end.getDate() - days)
-    return { start: prevStart, end: prevEnd }
-  }
-  if (range.value === '今天') {
-    const prevStart = new Date(start)
-    prevStart.setDate(start.getDate() - 1)
-    return { start: prevStart, end: prevStart }
-  }
-
-  if (range.value === '本月') {
-    const prevStart = new Date(start.getFullYear(), start.getMonth() - 1, 1)
-    const prevEnd = new Date(start.getFullYear(), start.getMonth(), 0)
-    return { start: prevStart, end: prevEnd }
-  }
-  if (range.value === '本季度') {
-    const prevStart = new Date(start.getFullYear(), start.getMonth() - 3, 1)
-    const prevEnd = new Date(start.getFullYear(), start.getMonth(), 0)
-    return { start: prevStart, end: prevEnd }
-  }
-  if (range.value === '本半年') {
-    const prevStart = new Date(start.getFullYear(), start.getMonth() - 6, 1)
-    const prevEnd = new Date(start.getFullYear(), start.getMonth(), 0)
-    return { start: prevStart, end: prevEnd }
-  }
-  if (range.value === '本年') {
-    const prevStart = new Date(start.getFullYear() - 1, 0, 1)
-    const prevEnd = new Date(start.getFullYear() - 1, 11, 31)
-    return { start: prevStart, end: prevEnd }
-  }
-  const prevStart = new Date(start)
-  prevStart.setDate(start.getDate() - days)
-  const prevEnd = new Date(end)
-  prevEnd.setDate(end.getDate() - days)
-  return { start: prevStart, end: prevEnd }
+  const prevEnd = addDays(start, -1)
+  const prevStart = addDays(prevEnd, -(days - 1))
+  return { start: prevStart, end: prevEnd, days }
 })
 
+function addDays(d, n) { const r = new Date(d); r.setDate(d.getDate() + n); return r }
 
-
-const isInRange = (event, rangeStart, rangeEnd) => {
-  const { start, end } = getEventRange(event)
-  if (!start || !end) return false
-  return end >= rangeStart && start <= rangeEnd
-}
-
+// ---------- 数据计算 ----------
 const eventsInRange = computed(() => {
   const { start, end } = rangeInfo.value
-  return events.value.filter(event => isInRange(event, start, end))
+  let list = events.value.filter(ev => isInRange(ev, start, end))
+  if (selectedType.value) list = list.filter(ev => ev.type === selectedType.value)
+  return list
 })
 
-const getStatusAt = (event, referenceDate) => {
-  const refStart = startOfDay(referenceDate)
-  const refEnd = endOfDay(referenceDate)
-  const { start, end } = getEventRange(event)
-  if (!start || !end) return '进行中'
-  if (end < refStart) return event.type === 'task' ? '逾期' : '已完成'
-  if (start > refEnd) return '待开始'
-  return '进行中'
+const allEventsInPeriod = computed(() => {
+  const { start, end } = rangeInfo.value
+  return events.value.filter(ev => isInRange(ev, start, end))
+})
+
+const rangeDays = computed(() => {
+  const { start, end } = rangeInfo.value
+  const days = []
+  const d = new Date(start)
+  while (d <= end) { days.push(new Date(d)); d.setDate(d.getDate() + 1) }
+  return days
+})
+
+const daily = computed(() => dailyDistribution(allEventsInPeriod.value, rangeDays.value))
+const hourly = computed(() => hourlyDensity(allEventsInPeriod.value))
+const weekday = computed(() => weekdayDistribution(allEventsInPeriod.value, rangeDays.value))
+const typeDist = computed(() => typeBreakdown(allEventsInPeriod.value))
+
+// ---------- 摘要卡片 ----------
+const totalHours = computed(() => daily.value.reduce((s, d) => s + d.hours, 0))
+const busiestDay = computed(() => daily.value.reduce((p, c) => c.count > p.count ? c : p, daily.value[0] || { count: 0 }))
+const topType = computed(() => typeDist.value[0] || { label: '-', percent: 0 })
+
+const prevStats = computed(() => {
+  const { start, end } = previousRangeInfo.value
+  const prevEvents = events.value.filter(ev => isInRange(ev, start, end))
+  const prevDays = []
+  const d = new Date(start)
+  while (d <= end) { prevDays.push(new Date(d)); d.setDate(d.getDate() + 1) }
+  const prevDaily = dailyDistribution(prevEvents, prevDays)
+  const prevHours = prevDaily.reduce((s, x) => s + x.hours, 0)
+  return { count: prevEvents.length, hours: prevHours }
+})
+
+const fmtChange = (cur, prev) => {
+  if (!prev && cur === 0) return '0%'
+  if (!prev) return '+100%'
+  const pct = Math.round(((cur - prev) / prev) * 100)
+  return `${pct > 0 ? '+' : ''}${pct}%`
 }
 
-const getStatus = (event) => {
-  return getStatusAt(event, new Date())
+const summaryCards = computed(() => [
+  { title: '总事件', value: allEventsInPeriod.value.length, change: fmtChange(allEventsInPeriod.value.length, prevStats.value.count), color: '#4f46e5', icon: '📋' },
+  { title: '总时长', value: `${Math.round(totalHours.value * 10) / 10}h`, change: fmtChange(totalHours.value, prevStats.value.hours), color: '#0ea5e9', icon: '⏱️' },
+  { title: '日均事件', value: rangeInfo.value.days ? (allEventsInPeriod.value.length / rangeInfo.value.days).toFixed(1) : '0', change: '', color: '#8b5cf6', icon: '📊' },
+  { title: '最忙日', value: busiestDay.value?.count ? `${busiestDay.value.date.getMonth() + 1}/${busiestDay.value.date.getDate()} (${busiestDay.value.count}件)` : '-', change: '', color: '#f59e0b', icon: '🔥' },
+  { title: '主要类型', value: topType.value.label, change: `${topType.value.percent}%`, color: topType.value.color, icon: '🏷️' },
+])
+
+// ---------- 智能洞察 ----------
+const insights = computed(() => generateInsights(allEventsInPeriod.value, rangeDays.value, hourly.value, weekday.value, typeDist.value))
+
+// ---------- ECharts ----------
+function initCharts() {
+  const dark = document.documentElement.classList.contains('dark')
+  const theme = dark ? 'dark' : ''
+
+  charts.trend = echarts.init(document.getElementById('chart-trend'), theme)
+  charts.pie = echarts.init(document.getElementById('chart-pie'), theme)
+  charts.hourly = echarts.init(document.getElementById('chart-hourly'), theme)
+  charts.weekday = echarts.init(document.getElementById('chart-weekday'), theme)
+
+  charts.pie.on('click', params => {
+    selectedType.value = selectedType.value === params.name ? null : params.name
+  })
+
+  updateCharts()
 }
 
+function updateCharts() {
+  if (!charts.trend) return
+  const dark = document.documentElement.classList.contains('dark')
+  const textColor = dark ? '#9ca3af' : '#6b7280'
+  const lineColor = dark ? '#374151' : '#e5e7eb'
 
-const focusHours = computed(() => {
-
-  const labels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
-  const data = labels.map(label => ({ day: label, hours: 0 }))
-
-  eventsInRange.value.forEach(event => {
-    if (event.isAllDay) return
-    if (typeof event.startTime !== 'number' || typeof event.endTime !== 'number') return
-    const { start } = getEventRange(event)
-    if (!start) return
-    const index = (start.getDay() + 6) % 7
-    const duration = Math.max(0, event.endTime - event.startTime)
-    data[index].hours += duration
+  // 趋势图(双轴面积)
+  const d = daily.value
+  charts.trend.setOption({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['事件数', '时长(h)'], textStyle: { color: textColor } },
+    grid: { left: 40, right: 40, top: 40, bottom: 30 },
+    xAxis: { type: 'category', data: d.map(x => `${x.date.getMonth() + 1}/${x.date.getDate()}`), axisLabel: { color: textColor } },
+    yAxis: [
+      { type: 'value', name: '事件数', axisLabel: { color: textColor }, splitLine: { lineStyle: { color: lineColor } } },
+      { type: 'value', name: '小时', axisLabel: { color: textColor }, splitLine: { show: false } }
+    ],
+    series: [
+      { name: '事件数', type: 'line', smooth: true, areaStyle: { opacity: 0.15 }, itemStyle: { color: '#6366f1' }, data: d.map(x => x.count) },
+      { name: '时长(h)', type: 'line', smooth: true, yAxisIndex: 1, areaStyle: { opacity: 0.1 }, itemStyle: { color: '#0ea5e9' }, data: d.map(x => x.hours) }
+    ]
   })
 
-  return data.map(item => ({ ...item, hours: Number(item.hours.toFixed(1)) }))
-})
-
-const typeDistribution = computed(() => {
-  const total = eventsInRange.value.length
-  const counts = typeConfig.reduce((acc, item) => ({ ...acc, [item.value]: 0 }), {})
-
-  eventsInRange.value.forEach(event => {
-    const key = typeConfig.some(item => item.value === event.type) ? event.type : 'other'
-    counts[key] += 1
+  // 类型分布(环形)
+  charts.pie.setOption({
+    tooltip: { trigger: 'item', formatter: '{b}<br/>数量: {c} ({d}%)' },
+    legend: { orient: 'vertical', right: 10, top: 'center', textStyle: { color: textColor } },
+    series: [{
+      type: 'pie', radius: ['45%', '70%'], center: ['40%', '50%'],
+      label: { show: false },
+      emphasis: { label: { show: true, fontSize: 14, fontWeight: 'bold', formatter: '{b}\n{d}%' } },
+      data: typeDist.value.map(t => ({ name: t.label, value: t.count, itemStyle: { color: t.color } }))
+    }]
   })
 
-  let accumulated = 0
-  return typeConfig.map((item, index) => {
-    let percent = total ? Math.round((counts[item.value] / total) * 100) : 0
-    if (index === typeConfig.length - 1) {
-      percent = Math.max(0, 100 - accumulated)
-    } else {
-      accumulated += percent
-    }
-    return { type: item.label, percent, color: item.color }
-  })
-})
-
-
-
-
-
-const countStats = (rangeStart, rangeEnd) => {
-  const filtered = events.value.filter(event => isInRange(event, rangeStart, rangeEnd))
-  const statusCounts = { completed: 0, ongoing: 0, overdue: 0 }
-  const referenceDate = rangeEnd || new Date()
-
-  filtered.forEach(event => {
-    const status = getStatusAt(event, referenceDate)
-    if (status === '已完成') statusCounts.completed += 1
-    if (status === '逾期') statusCounts.overdue += 1
-    if (status === '进行中' || status === '待开始') statusCounts.ongoing += 1
+  // 时段热力
+  charts.hourly.setOption({
+    tooltip: { formatter: p => `${p.name}:00<br/>事件 ${p.value} 次` },
+    grid: { left: 40, right: 20, top: 20, bottom: 30 },
+    xAxis: { type: 'category', data: hourly.value.map(h => `${h.hour}`), axisLabel: { color: textColor } },
+    yAxis: { type: 'value', axisLabel: { color: textColor }, splitLine: { lineStyle: { color: lineColor } } },
+    series: [{
+      type: 'bar', barWidth: '60%',
+      data: hourly.value.map(h => ({
+        value: h.count,
+        itemStyle: {
+          color: h.count === 0 ? (dark ? '#1f2937' : '#f3f4f6') : `rgba(99, 102, 241, ${Math.min(0.3 + h.count / 20, 1)})`
+        }
+      }))
+    }]
   })
 
-
-  return {
-    total: filtered.length,
-    completed: statusCounts.completed,
-    ongoing: statusCounts.ongoing,
-    overdue: statusCounts.overdue
-  }
+  // 星期对比
+  charts.weekday.setOption({
+    tooltip: { formatter: p => `${p.name}<br/>总计 ${p.value} 件` },
+    grid: { left: 40, right: 20, top: 20, bottom: 30 },
+    xAxis: { type: 'category', data: weekday.value.map(w => w.day), axisLabel: { color: textColor } },
+    yAxis: { type: 'value', axisLabel: { color: textColor }, splitLine: { lineStyle: { color: lineColor } } },
+    series: [{
+      type: 'bar', barWidth: '50%',
+      itemStyle: { color: '#8b5cf6', borderRadius: [4, 4, 0, 0] },
+      data: weekday.value.map(w => w.total)
+    }]
+  })
 }
 
-const formatChange = (current, previous) => {
-  if (!previous && current === 0) return '0%'
-  if (!previous) return '+100%'
-  const diff = ((current - previous) / previous) * 100
-  const sign = diff > 0 ? '+' : ''
-  return `${sign}${Math.round(diff)}%`
-}
+function resizeCharts() { Object.values(charts).forEach(c => c?.resize()) }
 
-const summaryCards = computed(() => {
-  const current = countStats(rangeInfo.value.start, rangeInfo.value.end)
-  const previous = countStats(previousRangeInfo.value.start, previousRangeInfo.value.end)
+watch([rangeInfo, selectedType, () => events.value.length], () => nextTick(updateCharts), { deep: true })
 
-  return [
-    { title: '总事件数', value: current.total, change: formatChange(current.total, previous.total), color: '#4f46e5' },
-    { title: '已完成', value: current.completed, change: formatChange(current.completed, previous.completed), color: '#10b981' },
-    { title: '进行中', value: current.ongoing, change: formatChange(current.ongoing, previous.ongoing), color: '#f59e0b' },
-    { title: '逾期', value: current.overdue, change: formatChange(current.overdue, previous.overdue), color: '#ef4444' }
-  ]
-})
-
-const efficiencyStats = computed(() => {
-  const total = eventsInRange.value.length
-  const pastEvents = eventsInRange.value.filter(event => {
-    const { end } = getEventRange(event)
-    return end && end < startOfDay(new Date())
-  })
-  const overdueCount = pastEvents.filter(event => getStatus(event) === '逾期').length
-  const completedCount = pastEvents.filter(event => getStatus(event) === '已完成').length
-  const completionRate = total ? Math.round((completedCount / total) * 100) : 0
-  const onTimeRate = pastEvents.length ? Math.round(((pastEvents.length - overdueCount) / pastEvents.length) * 100) : 100
-
-  const totalFocus = focusHours.value.reduce((sum, item) => sum + item.hours, 0)
-  const focusRate = rangeInfo.value.days ? Math.min(100, Math.round((totalFocus / (rangeInfo.value.days * 8)) * 100)) : 0
-
-  return { completionRate, onTimeRate, focusRate }
-})
-
-const efficiencyTip = computed(() => {
-  const maxDay = focusHours.value.reduce((prev, current) => (current.hours > prev.hours ? current : prev), focusHours.value[0])
-  if (!maxDay) return '建议：将高优先级任务安排在上午 9:00-11:00。'
-  return `建议：你的高效日为${maxDay.day}，将重要任务放在该日高峰时段更容易完成。`
-})
-
-const reportText = ref('')
-
-const weeklyReport = computed(() => {
-  const { start, end } = weekRange.value
-  const weekDays = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(start)
-    date.setDate(start.getDate() + index)
-    return date
-  })
-  const weekLabel = `本周周报（${formatYmd(start)} 至 ${formatYmd(end)}）`
-
-  const lines = weekDays.map((day) => {
-    const dayLabel = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][(day.getDay() + 6) % 7]
-    const dayHeader = `${dayLabel}（${formatYmd(day)}）`
-    const dayEvents = events.value
-      .filter(event => isEventOnDay(event, day))
-      .sort((a, b) => {
-        if ((a.startTime || 0) !== (b.startTime || 0)) return (a.startTime || 0) - (b.startTime || 0)
-        return (a.title || '').localeCompare(b.title || '')
-      })
-
-    if (dayEvents.length === 0) {
-      return `${dayHeader}\n- 无事件`
-    }
-
-    const details = dayEvents.map(event => {
-      const timeLabel = event.isAllDay ? '全天' : `${formatTime(event.startTime)}-${formatTime(event.endTime)}`
-      return `- ${timeLabel} ${event.title || '未命名事件'}`
-    })
-
-    return `${dayHeader}\n${details.join('\n')}`
-  })
-
-  return [weekLabel, ...lines].join('\n')
-})
-
+// ---------- 周报 ----------
 const generateWeeklyReport = () => {
-  reportText.value = weeklyReport.value
+  const { insights: tips, typeDist: types } = { insights: insights.value, typeDist: typeDist.value }
+  const total = allEventsInPeriod.value.length
+  const hours = Math.round(totalHours.value * 10) / 10
+  const busiest = busiestDay.value
+  const typeSummary = types.slice(0, 3).map(t => `${t.label} ${t.count}件(${t.percent}%)`).join('、')
+
+  reportText.value = [
+    `统计周期：${formatYmd(rangeInfo.value.start)} 至 ${formatYmd(rangeInfo.value.end)}（${rangeInfo.value.days}天）`,
+    ``,
+    `📊 总览`,
+    `- 总事件：${total} 件`,
+    `- 总时长：${hours} 小时`,
+    `- 日均事件：${(total / rangeInfo.value.days).toFixed(1)} 件`,
+    `- 最忙日：${busiest?.count ? `${busiest.date.getMonth() + 1}/${busiest.date.getDate()}（${busiest.count}件）` : '无'}`,
+    `- 主要类型：${typeSummary || '无'}`,
+    ``,
+    `💡 洞察`,
+    ...tips.map(t => `- ${t.text}`)
+  ].join('\n')
 }
 
-const copyWeeklyReport = async () => {
-  const text = reportText.value || weeklyReport.value
-  if (!text) {
-    ElMessage.warning('暂无可复制内容')
-    return
-  }
+const copyReport = async () => {
+  if (!reportText.value) generateWeeklyReport()
   try {
-    await navigator.clipboard.writeText(text)
-    reportText.value = text
-    ElMessage.success('已复制周报')
-  } catch (error) {
-    reportText.value = text
-    ElMessage.error('复制失败，请手动复制')
-  }
+    await navigator.clipboard.writeText(reportText.value)
+    ElMessage.success('已复制统计报告')
+  } catch { ElMessage.error('复制失败') }
 }
-
-
 </script>
-
 
 <template>
   <div class="stats-page">
     <header class="stats-header">
       <div>
-        <h2 class="stats-title">统计面板</h2>
-        <p class="stats-subtitle">聚合你的节奏、完成效率与事件分布。</p>
+        <h2 class="stats-title">统计中心</h2>
+        <p class="stats-subtitle">多维度分析你的时间分配与工作节奏</p>
       </div>
       <div class="stats-actions">
-        <el-date-picker
-          v-model="dateRange"
-          type="daterange"
-  
-          class="stats-date"
-          unlink-panels
-          range-separator="至"
-          start-placeholder="开始日期"
-          end-placeholder="结束日期"
-          value-format="YYYY-MM-DD"
-          clearable
-        />
-        <el-select v-model="range" class="stats-select">
-          <el-option label="今天" value="今天" />
-          <el-option label="近7天" value="近7天" />
-          <el-option label="近30天" value="近30天" />
-          <el-option label="本月" value="本月" />
-          <el-option label="本季度" value="本季度" />
-          <el-option label="本半年" value="本半年" />
+        <el-date-picker v-model="dateRange" type="daterange" range-separator="至"
+          start-placeholder="开始" end-placeholder="结束" value-format="YYYY-MM-DD" style="width: 240px" />
+        <el-select v-model="range" style="width: 110px">
+          <el-option label="今天" value="今天" /><el-option label="近7天" value="近7天" />
+          <el-option label="近30天" value="近30天" /><el-option label="本月" value="本月" />
+          <el-option label="本季度" value="本季度" /><el-option label="本半年" value="本半年" />
           <el-option label="本年" value="本年" />
         </el-select>
-        <el-button type="primary">导出报表</el-button>
       </div>
-
     </header>
+
     <div class="page-body">
-
-    <section class="stats-grid">
-      <el-card v-for="card in summaryCards" :key="card.title" class="summary-card" shadow="never">
-        <div class="summary-card__header">
-          <span class="summary-card__title">{{ card.title }}</span>
-          <span class="summary-card__change" :style="{ color: card.color }">{{ card.change }}</span>
+      <!-- 摘要卡片 -->
+      <section class="stats-grid">
+        <div v-for="card in summaryCards" :key="card.title" class="summary-card" :style="{ '--accent': card.color }">
+          <div class="summary-card__header">
+            <span class="summary-card__icon">{{ card.icon }}</span>
+            <span class="summary-card__title">{{ card.title }}</span>
+          </div>
+          <div class="summary-card__value">{{ card.value }}</div>
+          <div v-if="card.change" class="summary-card__change" :style="{ color: card.color }">{{ card.change }}</div>
         </div>
-        <div class="summary-card__value">{{ card.value }}</div>
-        <div class="summary-card__hint">较上周期</div>
-        <div class="summary-card__bar" :style="{ background: card.color }"></div>
-      </el-card>
-    </section>
+      </section>
 
-    <section class="stats-content">
-      <el-card class="panel" shadow="never">
-        <template #header>
-          <div class="panel-title">事件类型分布</div>
-        </template>
-        <div class="distribution">
-          <div v-for="item in typeDistribution" :key="item.type" class="distribution-item">
-            <div class="distribution-item__label">
-              <span>{{ item.type }}</span>
-              <span>{{ item.percent }}%</span>
-            </div>
-            <el-progress :percentage="item.percent" :stroke-width="10" :color="item.color" />
+      <!-- 趋势 + 类型分布 -->
+      <section class="stats-row">
+        <div class="stats-panel">
+          <div class="panel-header">
+            <span class="panel-title">📈 事件趋势</span>
+            <span v-if="selectedType" class="filter-tag" @click="selectedType = null">
+              {{ selectedType }} ✕
+            </span>
           </div>
+          <div id="chart-trend" class="chart-lg"></div>
         </div>
-      </el-card>
-
-      <el-card class="panel" shadow="never">
-        <template #header>
-          <div class="panel-title">效率概览</div>
-        </template>
-        <div class="efficiency">
-          <div class="efficiency-item">
-            <span>完成率</span>
-            <el-progress :percentage="efficiencyStats.completionRate" :stroke-width="12" />
+        <div class="stats-panel">
+          <div class="panel-header">
+            <span class="panel-title">🍩 类型分布</span>
+            <span class="panel-hint">点击筛选</span>
           </div>
-          <div class="efficiency-item">
-            <span>准时率</span>
-            <el-progress :percentage="efficiencyStats.onTimeRate" :stroke-width="12" color="#10b981" />
-          </div>
-          <div class="efficiency-item">
-            <span>专注占比</span>
-            <el-progress :percentage="efficiencyStats.focusRate" :stroke-width="12" color="#6366f1" />
-          </div>
-          <div class="efficiency-tip">
-            {{ efficiencyTip }}
-          </div>
+          <div id="chart-pie" class="chart-lg"></div>
         </div>
-      </el-card>
+      </section>
 
-      <el-card class="panel" shadow="never">
-        <template #header>
-          <div class="panel-title">专注时长（小时）</div>
-        </template>
-        <div class="bar-chart">
-          <div v-for="item in focusHours" :key="item.day" class="bar-item">
-            <div class="bar-item__label">{{ item.day }}</div>
-            <div class="bar-item__track">
-              <div class="bar-item__bar" :style="{ width: `${(item.hours / 8) * 100}%` }"></div>
-            </div>
-            <div class="bar-item__value">{{ item.hours }}h</div>
-          </div>
+      <!-- 时段 + 星期 -->
+      <section class="stats-row">
+        <div class="stats-panel">
+          <div class="panel-header"><span class="panel-title">🕐 时段分布</span></div>
+          <div id="chart-hourly" class="chart-sm"></div>
         </div>
-      </el-card>
+        <div class="stats-panel">
+          <div class="panel-header"><span class="panel-title">📊 星期对比</span></div>
+          <div id="chart-weekday" class="chart-sm"></div>
+        </div>
+      </section>
 
-      <el-card class="panel" shadow="never">
-        <template #header>
-          <div class="panel-title weekly-report__header">
-            <span>生成周报</span>
-            <div class="weekly-report__actions">
-              <el-button size="small" @click="copyWeeklyReport">一键复制</el-button>
-              <el-button size="small" type="primary" @click="generateWeeklyReport">生成周报</el-button>
+      <!-- 智能洞察 -->
+      <section class="stats-panel insight-panel">
+        <div class="panel-header"><span class="panel-title">💡 智能洞察</span></div>
+        <div class="insight-list">
+          <div v-for="(tip, i) in insights" :key="i" class="insight-item">
+            <span class="insight-icon">{{ tip.icon }}</span>
+            <div class="insight-content">
+              <div class="insight-title">{{ tip.title }}</div>
+              <div class="insight-text">{{ tip.text }}</div>
             </div>
           </div>
+          <div v-if="insights.length === 0" class="insight-empty">暂无洞察建议，先添加一些事件吧</div>
+        </div>
+      </section>
 
-        </template>
-        <el-input
-          v-model="reportText"
-          type="textarea"
-          :rows="10"
-          class="weekly-report__textarea"
-          placeholder="点击“生成周报”后展示本周事件"
-        />
-      </el-card>
-
-    </section>
-
+      <!-- 周报 -->
+      <section class="stats-panel">
+        <div class="panel-header">
+          <span class="panel-title">📝 统计报告</span>
+          <div>
+            <el-button size="small" @click="generateWeeklyReport">生成</el-button>
+            <el-button size="small" type="primary" @click="copyReport">复制</el-button>
+          </div>
+        </div>
+        <pre v-if="reportText" class="report-text">{{ reportText }}</pre>
+        <div v-else class="report-empty">点击"生成"查看统计报告</div>
+      </section>
     </div>
   </div>
 </template>
 
 <style scoped>
 .stats-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
-  box-sizing: border-box;
-  background: transparent;
+  display: flex; flex-direction: column; height: 100%; overflow: hidden;
+  box-sizing: border-box; scrollbar-gutter: stable;
 }
-
 .page-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  box-sizing: border-box;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-
-.page-body::-webkit-scrollbar {
-  width: 8px;
-}
-
-.page-body::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 4px;
-}
-
-.page-body:hover::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
+  flex: 1; overflow-y: auto; padding: 20px;
+  display: flex; flex-direction: column; gap: 16px; box-sizing: border-box;
 }
 
 .stats-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-shrink: 0;
-  padding: 20px 30px;
-  background: #fff;
-  border-bottom: 1px solid #e2e8f0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+  padding: 20px 30px; background: #fff; border-bottom: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05); flex-shrink: 0;
 }
+.stats-title { margin: 0; font-size: 20px; color: #1f2937; }
+.stats-subtitle { margin: 4px 0 0; font-size: 13px; color: #6b7280; }
+.stats-actions { display: flex; align-items: center; gap: 8px; }
 
-  html.dark .stats-header {
-    background: #2f2f2f;
-    border-bottom-color: #3a3a3a;
-    box-shadow: none;
-  }
-  html.dark .stats-title { color: #e5e7eb; }
-  html.dark .stats-subtitle { color: #9ca3af; }
-  html.dark .stats-page {
-    --el-bg-color: #2f2f2f;
-    --el-card-bg-color: #2f2f2f;
-    --el-border-color-light: #3a3a3a;
-    --el-border-color-lighter: #333333;
-    --el-text-color-primary: #e5e7eb;
-    --el-text-color-regular: #cbd5e1;
-    --el-fill-color-blank: #2f2f2f;
-    --el-fill-color-light: #3a3a3a;
-  }
-
-.stats-title {
-  margin: 0 0 6px;
-  font-size: 22px;
-  font-weight: 600;
-  color: #1f2937;
-}
-
-.stats-subtitle {
-  margin: 0;
-  color: #6b7280;
-  font-size: 14px;
-}
-
-.stats-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.stats-date {
-  width: 240px;
-}
-
-.stats-select {
-  width: 120px;
-}
-
-
+/* 摘要卡片 */
 .stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 16px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
 }
-
 .summary-card {
-  position: relative;
-  border-radius: 14px;
-  border: 1px solid #eef2ff;
+  background: #fff; border-radius: 10px; padding: 14px 16px;
+  border-left: 3px solid var(--accent, #4f46e5);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.summary-card__header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.summary-card__icon { font-size: 18px; }
+.summary-card__title { font-size: 12px; color: #6b7280; }
+.summary-card__value { font-size: 22px; font-weight: 700; color: #1f2937; }
+.summary-card__change { font-size: 12px; margin-top: 4px; }
+
+/* 面板 */
+.stats-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.stats-panel {
+  background: #fff; border-radius: 10px; padding: 16px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.panel-title { font-size: 14px; font-weight: 600; color: #374151; }
+.panel-hint { font-size: 11px; color: #9ca3af; }
+
+.chart-lg { height: 280px; }
+.chart-sm { height: 200px; }
+
+.filter-tag {
+  font-size: 12px; padding: 2px 8px; border-radius: 10px;
+  background: #eef2ff; color: #4f46e5; cursor: pointer;
 }
 
-.summary-card__header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
+/* 洞察 */
+.insight-panel { grid-column: 1 / -1; }
+.insight-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+.insight-item {
+  display: flex; gap: 10px; padding: 12px; border-radius: 8px;
+  background: #f8fafc; border: 1px solid #f1f5f9;
 }
+.insight-icon { font-size: 20px; flex-shrink: 0; }
+.insight-title { font-size: 13px; font-weight: 600; color: #1f2937; margin-bottom: 2px; }
+.insight-text { font-size: 12px; color: #6b7280; line-height: 1.5; }
+.insight-empty { text-align: center; color: #9ca3af; padding: 20px; }
 
-.summary-card__title {
-  font-size: 14px;
-  color: #6b7280;
+/* 报告 */
+.report-text {
+  background: #f8fafc; border-radius: 8px; padding: 16px;
+  font-family: monospace; font-size: 13px; color: #374151;
+  white-space: pre-wrap; line-height: 1.6;
 }
+.report-empty { text-align: center; color: #9ca3af; padding: 30px; }
 
-.summary-card__change {
-  font-size: 12px;
-  font-weight: 600;
-}
+/* 响应式 */
+@media (max-width: 900px) { .stats-row { grid-template-columns: 1fr; } }
 
-.summary-card__value {
-  font-size: 28px;
-  font-weight: 600;
-  color: #111827;
-}
-
-.summary-card__hint {
-  font-size: 12px;
-  color: #9ca3af;
-}
-
-.summary-card__bar {
-  margin-top: 12px;
-  height: 4px;
-  border-radius: 999px;
-  opacity: 0.7;
-}
-
-.stats-content {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.panel {
-  border-radius: 14px;
-  border: 1px solid #eef2ff;
-}
-
-.panel--wide {
-  grid-column: 1 / -1;
-}
-
-.panel-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #111827;
-}
-
-.bar-chart {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.bar-item {
-  display: grid;
-  grid-template-columns: 60px 1fr 50px;
-  align-items: center;
-  gap: 10px;
-}
-
-.bar-item__label {
-  font-size: 13px;
-  color: #6b7280;
-}
-
-.bar-item__track {
-  height: 10px;
-  border-radius: 999px;
-  background: #eef2ff;
-  overflow: hidden;
-}
-
-.bar-item__bar {
-  height: 100%;
-  background: linear-gradient(90deg, #6366f1, #8b5cf6);
-  border-radius: inherit;
-}
-
-.bar-item__value {
-  font-size: 12px;
-  color: #6b7280;
-  text-align: right;
-}
-
-.distribution {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.distribution-item__label {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  color: #6b7280;
-  margin-bottom: 6px;
-}
-
-.efficiency {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.efficiency-item span {
-  font-size: 13px;
-  color: #6b7280;
-  display: inline-block;
-  margin-bottom: 6px;
-}
-
-.efficiency-tip {
-  background: #eef2ff;
-  color: #4f46e5;
-  padding: 10px 12px;
-  border-radius: 10px;
-  font-size: 12px;
-}
-
-.weekly-report__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.weekly-report__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.weekly-report__textarea {
-  width: 100%;
-}
-
-
-.stats-table {
-  width: 100%;
-}
-
-
-/* 滚动条样式 - 仅在滚动时显示，覆盖式不挤压内容 */
-.stats-page::-webkit-scrollbar {
-  width: 8px;
-}
-
-.stats-page::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.stats-page::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 4px;
-}
-
-.stats-page:hover::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-}
-
-.stats-page::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
-}
-
-/* Firefox 滚动条样式 */
-.stats-page {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-
-.stats-page:hover {
-  scrollbar-color: rgba(0, 0, 0, 0.35) transparent;
-}
-
-@media (max-width: 1024px) {
-
-  .stats-content {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 768px) {
-  .stats-header {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .stats-grid {
-    grid-template-columns: 1fr;
-  }
-}
+/* 深色模式 */
+html.dark .stats-header { background: #2f2f2f; border-bottom-color: #3a3a3a; }
+html.dark .stats-title { color: #e5e7eb; }
+html.dark .stats-subtitle { color: #9ca3af; }
+html.dark .summary-card { background: #2f2f2f; }
+html.dark .summary-card__value { color: #e5e7eb; }
+html.dark .summary-card__title { color: #9ca3af; }
+html.dark .stats-panel { background: #2f2f2f; }
+html.dark .panel-title { color: #d1d5db; }
+html.dark .insight-item { background: #262626; border-color: #333; }
+html.dark .insight-title { color: #e5e7eb; }
+html.dark .insight-text { color: #9ca3af; }
+html.dark .report-text { background: #262626; color: #d1d5db; }
+html.dark .filter-tag { background: #312e81; color: #a5b4fc; }
 </style>
-
